@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mathlib"
+version = "0.1.0"
+description = "A mathematical library with custom implementations"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Author", email = "author@example.com"},
+]
+
+[tool.setuptools]
+packages = ["math_library"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
