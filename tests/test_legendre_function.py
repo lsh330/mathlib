@@ -74,3 +74,7 @@ def run_legendre_tests():
 
 if __name__ == "__main__":
     run_legendre_tests()
+
+
+def test_main():
+    run_legendre_tests()

@@ -9,6 +9,7 @@ from ..exponential_function.power import (
     _validate_real_number,
     _validate_tol,
 )
+from .._core.logarithmic import ln as _ln_core, log as _log_core
 
 
 def log(
@@ -19,9 +20,20 @@ def log(
     number_system: str = "real",
 ) -> Union[float, complex]:
     """
-    Compute log_base(x) on the principal complex branch:
-        log_base(x) = Log(x) / Log(base)
+    Compute log_base(x).
+    real mode: Cython _core 구현 (fdlibm, 1 ULP 정밀도)
+    complex mode: Log(x) / Log(base) (principal branch)
     """
+    # fast-path: 가장 일반적인 float+float real 호출
+    if type(x) is float and type(base) is float and number_system == "real":
+        if x <= 0.0:
+            raise ValueError("x must be positive in real mode.")
+        if base <= 0.0:
+            raise ValueError("base must be positive in real mode.")
+        if base == 1.0:
+            raise ValueError("base must not be 1.")
+        return _log_core(base, x)
+
     number_system_value = _validate_number_system(number_system)
     tol_value = _validate_tol(tol)
     max_terms_value = _validate_max_terms(max_terms)
@@ -37,14 +49,9 @@ def log(
         if base_real == 1.0:
             raise ValueError("base must not be 1.")
 
-        log_base_real = _complex_log(complex(base_real, 0.0), tol_value, max_terms_value)
-        log_x_real = _complex_log(complex(x_real, 0.0), tol_value, max_terms_value)
-        result_real = log_x_real / log_base_real
-        normalized_real = _normalize(result_real, tol_value)
-        if isinstance(normalized_real, complex):
-            raise RuntimeError("real-mode result unexpectedly became complex.")
-        return float(normalized_real)
+        return _log_core(base_real, x_real)
 
+    # complex mode
     base_value = _validate_number("base", base)
     x_value = _validate_number("x", x)
     base_complex = complex(base_value)
@@ -62,4 +69,3 @@ def log(
         raise ValueError("base has zero logarithm on the principal branch.")
     result = _complex_log(x_complex, tol_value, max_terms_value) / log_base
     return _normalize(result, tol_value)
-

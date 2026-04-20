@@ -131,3 +131,7 @@ def run_inverse_trigonometric_tests():
 
 if __name__ == "__main__":
     run_inverse_trigonometric_tests()
+
+
+def test_main():
+    run_inverse_trigonometric_tests()

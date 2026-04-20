@@ -74,3 +74,7 @@ def run_euler_pi_tests():
 
 if __name__ == "__main__":
     run_euler_pi_tests()
+
+
+def test_main():
+    run_euler_pi_tests()

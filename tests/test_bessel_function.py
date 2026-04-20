@@ -78,3 +78,7 @@ def run_bessel_tests():
 
 if __name__ == "__main__":
     run_bessel_tests()
+
+
+def test_main():
+    run_bessel_tests()

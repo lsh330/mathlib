@@ -78,3 +78,7 @@ def run_lambert_w_tests():
 
 if __name__ == "__main__":
     run_lambert_w_tests()
+
+
+def test_main():
+    run_lambert_w_tests()

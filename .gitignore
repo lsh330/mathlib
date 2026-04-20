@@ -21,3 +21,11 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Cython 산출물
+*.pyd
+*.so
+*.c
+*.html
+build/
+

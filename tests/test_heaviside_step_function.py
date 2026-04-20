@@ -70,3 +70,7 @@ def run_heaviside_tests():
 
 if __name__ == "__main__":
     run_heaviside_tests()
+
+
+def test_main():
+    run_heaviside_tests()

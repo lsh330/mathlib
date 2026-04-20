@@ -115,3 +115,7 @@ def run_hyperbolic_tests():
 
 if __name__ == "__main__":
     run_hyperbolic_tests()
+
+
+def test_main():
+    run_hyperbolic_tests()

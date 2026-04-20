@@ -67,3 +67,7 @@ def run_lcm_tests():
 
 if __name__ == "__main__":
     run_lcm_tests()
+
+
+def test_main():
+    run_lcm_tests()

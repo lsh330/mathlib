@@ -74,3 +74,7 @@ def run_zeta_tests():
 
 if __name__ == "__main__":
     run_zeta_tests()
+
+
+def test_main():
+    run_zeta_tests()

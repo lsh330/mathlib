@@ -67,3 +67,7 @@ def run_gcd_tests():
 
 if __name__ == "__main__":
     run_gcd_tests()
+
+
+def test_main():
+    run_gcd_tests()

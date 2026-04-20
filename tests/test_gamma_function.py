@@ -75,3 +75,7 @@ def run_gamma_tests():
 
 if __name__ == "__main__":
     run_gamma_tests()
+
+
+def test_main():
+    run_gamma_tests()

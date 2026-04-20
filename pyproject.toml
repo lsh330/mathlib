@@ -1,15 +1,15 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["setuptools>=61", "Cython>=3.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mathlib"
-version = "0.1.0"
-description = "A mathematical library with custom implementations"
+name = "math_library"
+version = "0.2.0"
+description = "자체 구현 Cython 기반 수학 라이브러리 (math 모듈 대체)"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    {name = "Author", email = "author@example.com"},
+    {name = "lsh330", email = "sanghoon330@naver.com"},
 ]
 
 [tool.setuptools]
@@ -19,5 +19,5 @@ packages = ["math_library"]
 "" = "src"
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
 testpaths = ["tests"]
+pythonpath = ["src"]

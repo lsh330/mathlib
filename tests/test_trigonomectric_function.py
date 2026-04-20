@@ -128,3 +128,7 @@ def run_trigonometric_tests():
 
 if __name__ == "__main__":
     run_trigonometric_tests()
+
+
+def test_main():
+    run_trigonometric_tests()

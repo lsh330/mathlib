@@ -104,3 +104,7 @@ def run_logarithmic_tests():
 
 if __name__ == "__main__":
     run_logarithmic_tests()
+
+
+def test_main():
+    run_logarithmic_tests()

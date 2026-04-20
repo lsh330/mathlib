@@ -242,3 +242,7 @@ def run_differentiation_tests():
 
 if __name__ == "__main__":
     run_differentiation_tests()
+
+
+def test_main():
+    run_differentiation_tests()

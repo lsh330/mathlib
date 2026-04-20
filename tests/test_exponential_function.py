@@ -101,3 +101,7 @@ def run_exponential_tests():
 
 if __name__ == "__main__":
     run_exponential_tests()
+
+
+def test_main():
+    run_exponential_tests()

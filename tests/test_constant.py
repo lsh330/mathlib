@@ -74,3 +74,7 @@ def run_constant_tests():
 
 if __name__ == "__main__":
     run_constant_tests()
+
+
+def test_main():
+    run_constant_tests()

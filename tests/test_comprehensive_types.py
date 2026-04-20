@@ -48,3 +48,7 @@ def run_all_category_tests():
 
 if __name__ == "__main__":
     run_all_category_tests()
+
+
+def test_main():
+    run_all_category_tests()
