@@ -1,8 +1,6 @@
 # math_library/__init__.py
 # 공용 API 재노출 — Cython _core 고속 경로 우선, 폴백은 Python 구현
 
-import cmath as _cmath
-
 # ------------------------------------------------------------------ 상수
 try:
     from ._core._constants import pi, e, epsilon
@@ -39,15 +37,44 @@ try:
         hypercosec_dispatch as hypercosec,
         hypercotan_dispatch as hypercotan,
     )
-    from ._core.exponential import exp_dispatch as exp
-    from ._core.logarithmic import ln_dispatch as ln, log_dispatch as log
-    from ._core.power_sqrt import sqrt_dispatch as sqrt, power_dispatch as power
+    from ._core.exponential import exp_dispatch as exp, expm1_dispatch as expm1
+    from ._core.logarithmic import ln_dispatch as ln, log_dispatch as log, log1p
+    from ._core.power_sqrt import (
+        sqrt_dispatch as sqrt, power_dispatch as power, cbrt_dispatch as cbrt
+    )
+    from ._core.inverse_hyperbolic import (
+        arc_hypersin, arc_hypercos, arc_hypertan,
+        arc_hypersec, arc_hypercosec, arc_hypercotan,
+    )
+    from ._core.multi_arg import atan2, hypot, dist
+    from ._core.discrete import factorial, comb, perm, isqrt
+    from ._core.aggregate import fsum, prod
+    from ._core.special_functions import erf, erfc, lgamma
+    from ._core.ieee_ops import (
+        ceil, floor, trunc, fmod, copysign, remainder, modf, nextafter, ulp
+    )
+    from ._core.predicates import isnan, isinf, isfinite, isclose
+
+    # math 호환 aliases (역쌍곡)
+    asinh = arc_hypersin
+    acosh = arc_hypercos
+    atanh = arc_hypertan
 
     # help() 시 내부 dispatch 이름 대신 공개 API 이름 표시
     for _name in ('sin', 'cos', 'tan', 'sec', 'cosec', 'cotan',
                   'arcsin', 'arccos', 'arctan', 'arcsec', 'arccosec', 'arccotan',
                   'hypersin', 'hypercos', 'hypertan', 'hypersec', 'hypercosec', 'hypercotan',
-                  'exp', 'ln', 'log', 'sqrt', 'power'):
+                  'exp', 'expm1', 'ln', 'log', 'log1p', 'sqrt', 'power', 'cbrt',
+                  'arc_hypersin', 'arc_hypercos', 'arc_hypertan',
+                  'arc_hypersec', 'arc_hypercosec', 'arc_hypercotan',
+                  'asinh', 'acosh', 'atanh',
+                  'atan2', 'hypot', 'dist',
+                  'factorial', 'comb', 'perm', 'isqrt',
+                  'fsum', 'prod',
+                  'erf', 'erfc', 'lgamma',
+                  'ceil', 'floor', 'trunc', 'fmod', 'copysign', 'remainder',
+                  'modf', 'nextafter', 'ulp',
+                  'isnan', 'isinf', 'isfinite', 'isclose'):
         _fn = vars().get(_name)
         if _fn is not None:
             try:
@@ -79,10 +106,14 @@ except ImportError:
     from .hyperbolic_function.hypercotan import hypercotan
     from .exponential_function.power import power
     from .logarithmic_function.log import log
-    # ln, exp, sqrt: 폴백에서 구현 없음 — 기존 코드와 호환
-    ln = log  # 임시
-    exp = _cmath.exp
-    sqrt = _cmath.sqrt
+    # Cython 빌드 실패 시 폴백 — ln/exp/sqrt는 기존 power/log로 표현
+    # (자체 구현 철학상 cmath 등 외부 라이브러리 사용 금지)
+    def ln(x):
+        return log(2.718281828459045235360287, x)
+    def exp(x):
+        return power(2.718281828459045235360287, x)
+    def sqrt(x):
+        return power(x, 0.5)
 
 # ------------------------------------------------------------------ 특수 함수
 from .gamma_function.gamma import gamma
@@ -114,8 +145,19 @@ __all__ = [
     # 쌍곡
     "hypersin", "hypercos", "hypertan", "hypersec", "hypercosec", "hypercotan",
     # 지수/로그
-    "exp", "ln", "log", "power", "sqrt",
-    # 특수
+    "exp", "expm1", "ln", "log", "log1p", "power", "sqrt", "cbrt",
+    # 역쌍곡 (mathlib 네이밍 + math 호환 alias)
+    "arc_hypersin", "arc_hypercos", "arc_hypertan",
+    "arc_hypersec", "arc_hypercosec", "arc_hypercotan",
+    "asinh", "acosh", "atanh",
+    # 다인수
+    "atan2", "hypot", "dist",
+    # 이산
+    "factorial", "comb", "perm", "isqrt",
+    # 집계
+    "fsum", "prod",
+    # 특수 함수
+    "erf", "erfc", "lgamma",
     "gamma", "beta",
     "bessel_j", "bessel_j0", "bessel_j1",
     "legendre",
@@ -123,6 +165,11 @@ __all__ = [
     "euler_pi", "euler_phi",
     "heaviside",
     "gcd", "lcm",
+    # IEEE ops
+    "ceil", "floor", "trunc", "fmod", "copysign", "remainder",
+    "modf", "nextafter", "ulp",
+    # 술어
+    "isnan", "isinf", "isfinite", "isclose",
     # 미분
     "Differentiation",
 ]

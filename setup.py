@@ -169,6 +169,35 @@ extensions = [
         "math_library.differentiation.differentiation",
         ["src/math_library/differentiation/differentiation.pyx"],
     ),
+    # Phase 2: 신규 모듈
+    make_ext(
+        "math_library._core.inverse_hyperbolic",
+        ["src/math_library/_core/inverse_hyperbolic.pyx"],
+    ),
+    make_ext(
+        "math_library._core.multi_arg",
+        ["src/math_library/_core/multi_arg.pyx"],
+    ),
+    make_ext(
+        "math_library._core.discrete",
+        ["src/math_library/_core/discrete.pyx"],
+    ),
+    make_ext(
+        "math_library._core.aggregate",
+        ["src/math_library/_core/aggregate.pyx"],
+    ),
+    make_ext(
+        "math_library._core.special_functions",
+        ["src/math_library/_core/special_functions.pyx"],
+    ),
+    make_ext(
+        "math_library._core.ieee_ops",
+        ["src/math_library/_core/ieee_ops.pyx"],
+    ),
+    make_ext(
+        "math_library._core.predicates",
+        ["src/math_library/_core/predicates.pyx"],
+    ),
 ]
 
 

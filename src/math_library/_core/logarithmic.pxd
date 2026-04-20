@@ -2,8 +2,10 @@
 # logarithmic.pxd — ln, log 선언
 
 cdef double _ln_inline(double x) noexcept nogil
+cdef double complex _ln_complex(double complex z) noexcept nogil
 cpdef double ln(double x) noexcept
 cpdef double log(double base, double x) noexcept
+cpdef double log1p(double x) noexcept
 
 # 복소수 auto-dispatch (방향 A)
 cpdef object ln_dispatch(object x)

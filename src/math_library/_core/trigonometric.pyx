@@ -9,14 +9,13 @@
 # trigonometric.pyx
 #
 # sin, cos, tan, sec, cosec, cotan — musl fdlibm 포팅
+# 복소수 커널 자체 구현 (cmath 사용 금지)
 # 참조: algorithm_reference.md 섹션 1~3
 
 from libc.math cimport fma
 from libc.stdint cimport uint32_t, int32_t
 from ._helpers cimport high_word, low_word, double_to_bits
 from .argument_reduction cimport rem_pio2
-
-import cmath as _cmath
 
 # ------------------------------------------------------------------ sin 계수
 # musl __sin.c, algorithm_reference.md 섹션 1
@@ -56,8 +55,14 @@ cdef double T12 =  2.59073051863633712884e-05
 cdef double PIO4_HI = 7.85398163397448278999e-01
 cdef double PIO4_LO = 3.06161699786838301793e-17
 
+# 쌍곡 보조 (복소수 커널용)
+# cosh/sinh는 hyperbolic.pyx에서 이미 구현되어 있으나 cimport 순환 방지를 위해
+# 여기서는 직접 expm1/exp 를 cimport해서 사용
+from .exponential cimport _exp_inline, _expm1_inline
+from ._helpers cimport _make_complex
 
-# ------------------------------------------------------------------ 커널 함수
+
+# ------------------------------------------------------------------ 실수 커널
 cdef double _sin_kernel(double x, double y) noexcept nogil:
     """
     [-π/4, π/4] 구간 sin 커널 (musl __sin.c).
@@ -92,9 +97,6 @@ cdef double _tan_kernel(double x, double y, int iy) noexcept nogil:
     [-π/4, π/4] 구간 tan 커널 (musl/fdlibm __tan.c 포팅).
     iy == 0: tan(x+y) 반환
     iy == 1: -1/tan(x+y) 반환 (cotan용)
-
-    |x| >= 0.6744 인 경우 (rem_pio2 후 x ≈ ±π/4):
-    tan(π/4 - δ) = (1 - tan(δ))/(1 + tan(δ)) 항등식 사용.
     """
     cdef uint32_t hx, ix
     cdef double z, r, v, w, s
@@ -103,31 +105,24 @@ cdef double _tan_kernel(double x, double y, int iy) noexcept nogil:
     hx = high_word(x)
     ix = hx & 0x7FFFFFFFU
 
-    # |x| < 2^-28: 직접 반환 (선형 근사)
-    # iy=1: tan_kernel은 -cot(x+y) = -(cos/sin) 반환
-    # x ≈ 0이면 cot(x) ≈ 1/x, 따라서 -cot(x) ≈ -1/x
     if ix < 0x3E300000U:
         if iy == 1:
             return -1.0 / x
         return x + y
 
-    # |x| >= 0.6744 여부를 기억 (재매핑 후 ix가 변경되므로 플래그 사용)
     big_x = 1 if ix >= 0x3FE59428U else 0
     sign = 1
 
     if big_x:
-        # x < 0이면 먼저 반전
         if hx >> 31:
             x = -x
             y = -y
             sign = -1
-        # π/4 - x로 재매핑: tan(π/4 - δ) 계산용
         z = PIO4_HI - x
         w = PIO4_LO - y
         x = z + w
         y = 0.0
 
-    # Chebyshev 다항식 근사 (musl __tan.c 계수)
     z = x * x
     w = z * z
     r = T1 + w * (T3 + w * (T5 + w * (T7 + w * (T9 + w * T11))))
@@ -135,12 +130,9 @@ cdef double _tan_kernel(double x, double y, int iy) noexcept nogil:
     s = z * x
     r = y + z * (s * (r + v) + y)
     r += T0 * s
-    w = x + r    # w ≈ tan(x_remapped)
+    w = x + r
 
     if big_x:
-        # tan(π/4 - δ) = (1 - tan(δ)) / (1 + tan(δ))
-        # iy=0: tan  ->  (1-w)/(1+w)
-        # iy=1: -cot -> -(1+w)/(1-w)
         if iy == 0:
             r = (1.0 - w) / (1.0 + w)
         else:
@@ -152,7 +144,234 @@ cdef double _tan_kernel(double x, double y, int iy) noexcept nogil:
     return w
 
 
-# ------------------------------------------------------------------ 공개 API
+# ------------------------------------------------------------------ 실수 sinh/cosh 커널 (복소수용 내부 전용)
+cdef inline double _sinh_real(double x) noexcept nogil:
+    """실수 sinh(x) — 복소수 커널 내부 전용"""
+    cdef double h, t, absx
+    cdef uint32_t ix
+    # 비트 트릭 없이 간단 구현 (복소수 커널 내부 전용이므로)
+    if x >= 0.0:
+        h = 0.5
+        absx = x
+    else:
+        h = -0.5
+        absx = -x
+    if absx < 1e-7:
+        return x
+    if absx < 7.09782712893383973096e+02:
+        t = _expm1_inline(absx)
+        if absx < 1.0:
+            return h * (2.0 * t - t * t / (t + 1.0))
+        return h * (t + t / (t + 1.0))
+    t = _exp_inline(absx * 0.5)
+    return h * t * t
+
+
+cdef inline double _cosh_real(double x) noexcept nogil:
+    """실수 cosh(x) — 복소수 커널 내부 전용"""
+    cdef double t, absx
+    absx = x if x >= 0.0 else -x
+    if absx < 1e-7:
+        return 1.0
+    if absx < 3.5e-1:
+        t = _expm1_inline(absx)
+        return 1.0 + t * t / (2.0 * (1.0 + t))
+    if absx < 7.09782712893383973096e+02:
+        t = _exp_inline(absx)
+        return 0.5 * (t + 1.0 / t)
+    t = _exp_inline(absx * 0.5)
+    return 0.5 * t * t
+
+
+# ------------------------------------------------------------------ 복소수 커널 (자체 구현)
+cdef double complex _sin_complex(double complex z) noexcept nogil:
+    """
+    sin(a+bi) = sin(a)*cosh(b) + i*cos(a)*sinh(b)
+    """
+    cdef double a, b, y[2]
+    cdef int n, q
+    cdef uint32_t ix
+    a = z.real
+    b = z.imag
+
+    cdef double sin_a, cos_a, sinh_b, cosh_b
+
+    # 실수부 sin/cos 계산 (자체 커널)
+    ix = high_word(a) & 0x7FFFFFFFU
+    if ix <= 0x3FE921FBU:
+        if ix < 0x3E500000U:
+            sin_a = a
+            cos_a = 1.0
+        else:
+            sin_a = _sin_kernel(a, 0.0)
+            cos_a = _cos_kernel(a, 0.0)
+    elif ix >= 0x7FF00000U:
+        sin_a = a - a  # NaN
+        cos_a = a - a
+    else:
+        n = rem_pio2(a, y)
+        q = n & 3
+        if q == 0:
+            sin_a =  _sin_kernel(y[0], y[1])
+            cos_a =  _cos_kernel(y[0], y[1])
+        elif q == 1:
+            sin_a =  _cos_kernel(y[0], y[1])
+            cos_a = -_sin_kernel(y[0], y[1])
+        elif q == 2:
+            sin_a = -_sin_kernel(y[0], y[1])
+            cos_a = -_cos_kernel(y[0], y[1])
+        else:
+            sin_a = -_cos_kernel(y[0], y[1])
+            cos_a =  _sin_kernel(y[0], y[1])
+
+    sinh_b = _sinh_real(b)
+    cosh_b = _cosh_real(b)
+
+    return _make_complex(sin_a * cosh_b, cos_a * sinh_b)
+
+
+cdef double complex _cos_complex(double complex z) noexcept nogil:
+    """
+    cos(a+bi) = cos(a)*cosh(b) - i*sin(a)*sinh(b)
+    """
+    cdef double a, b, y[2]
+    cdef int n, q
+    cdef uint32_t ix
+    a = z.real
+    b = z.imag
+
+    cdef double sin_a, cos_a, sinh_b, cosh_b
+
+    ix = high_word(a) & 0x7FFFFFFFU
+    if ix <= 0x3FE921FBU:
+        if ix < 0x3E500000U:
+            sin_a = a
+            cos_a = 1.0
+        else:
+            sin_a = _sin_kernel(a, 0.0)
+            cos_a = _cos_kernel(a, 0.0)
+    elif ix >= 0x7FF00000U:
+        sin_a = a - a
+        cos_a = a - a
+    else:
+        n = rem_pio2(a, y)
+        q = n & 3
+        if q == 0:
+            sin_a =  _sin_kernel(y[0], y[1])
+            cos_a =  _cos_kernel(y[0], y[1])
+        elif q == 1:
+            sin_a =  _cos_kernel(y[0], y[1])
+            cos_a = -_sin_kernel(y[0], y[1])
+        elif q == 2:
+            sin_a = -_sin_kernel(y[0], y[1])
+            cos_a = -_cos_kernel(y[0], y[1])
+        else:
+            sin_a = -_cos_kernel(y[0], y[1])
+            cos_a =  _sin_kernel(y[0], y[1])
+
+    sinh_b = _sinh_real(b)
+    cosh_b = _cosh_real(b)
+
+    return _make_complex(cos_a * cosh_b, -sin_a * sinh_b)
+
+
+cdef double complex _tan_complex(double complex z) noexcept nogil:
+    """
+    tan(a+bi) 표준 공식 (cmath 참조):
+      denom = cos(2a) + cosh(2b)
+      real  = sin(2a) / denom
+      imag  = sinh(2b) / denom
+    |b| > 20 이상: overflow 방지 처리
+    """
+    cdef double a = z.real
+    cdef double b = z.imag
+    cdef double absb = b if b >= 0.0 else -b
+
+    # |b| > 20: cosh(2b) >> cos(2a), denom ≈ cosh(2b)
+    #   real ≈ sin(2a)/cosh(2b) → 0, imag ≈ tanh(2b) → sign(b)
+    if absb > 20.0:
+        if b > 0.0:
+            return _make_complex(0.0, 1.0)
+        return _make_complex(0.0, -1.0)
+
+    cdef double two_a = 2.0 * a
+    cdef double two_b = 2.0 * b
+    cdef double y[2]
+    cdef int n, q
+    cdef uint32_t ix2
+
+    # sin(2a), cos(2a) — 자체 커널 사용
+    cdef double sin2a, cos2a
+    ix2 = high_word(two_a) & 0x7FFFFFFFU
+
+    if ix2 <= 0x3FE921FBU:
+        if ix2 < 0x3E500000U:
+            sin2a = two_a
+            cos2a = 1.0
+        else:
+            sin2a = _sin_kernel(two_a, 0.0)
+            cos2a = _cos_kernel(two_a, 0.0)
+    elif ix2 >= 0x7FF00000U:
+        sin2a = two_a - two_a
+        cos2a = two_a - two_a
+    else:
+        n = rem_pio2(two_a, y)
+        q = n & 3
+        if q == 0:
+            sin2a =  _sin_kernel(y[0], y[1])
+            cos2a =  _cos_kernel(y[0], y[1])
+        elif q == 1:
+            sin2a =  _cos_kernel(y[0], y[1])
+            cos2a = -_sin_kernel(y[0], y[1])
+        elif q == 2:
+            sin2a = -_sin_kernel(y[0], y[1])
+            cos2a = -_cos_kernel(y[0], y[1])
+        else:
+            sin2a = -_cos_kernel(y[0], y[1])
+            cos2a =  _sin_kernel(y[0], y[1])
+
+    cdef double sinh2b = _sinh_real(two_b)
+    cdef double cosh2b = _cosh_real(two_b)
+
+    cdef double denom = cos2a + cosh2b
+    if denom == 0.0:
+        return _make_complex(1.0 / 0.0, 0.0)
+
+    return _make_complex(sin2a / denom, sinh2b / denom)
+
+
+cdef double complex _sec_complex(double complex z) noexcept nogil:
+    """sec(z) = 1/cos(z)"""
+    cdef double complex c = _cos_complex(z)
+    cdef double denom = c.real * c.real + c.imag * c.imag
+    if denom == 0.0:
+        return _make_complex(1.0 / 0.0, 0.0)
+    return _make_complex(c.real / denom, -c.imag / denom)
+
+
+cdef double complex _cosec_complex(double complex z) noexcept nogil:
+    """cosec(z) = 1/sin(z)"""
+    cdef double complex s = _sin_complex(z)
+    cdef double denom = s.real * s.real + s.imag * s.imag
+    if denom == 0.0:
+        return _make_complex(1.0 / 0.0, 0.0)
+    return _make_complex(s.real / denom, -s.imag / denom)
+
+
+cdef double complex _cotan_complex(double complex z) noexcept nogil:
+    """cotan(z) = cos(z)/sin(z)"""
+    cdef double complex s = _sin_complex(z)
+    cdef double complex c = _cos_complex(z)
+    cdef double denom = s.real * s.real + s.imag * s.imag
+    if denom == 0.0:
+        return _make_complex(1.0 / 0.0, 0.0)
+    return _make_complex(
+        (c.real * s.real + c.imag * s.imag) / denom,
+        (c.imag * s.real - c.real * s.imag) / denom
+    )
+
+
+# ------------------------------------------------------------------ 공개 API (실수 전용 고속 경로)
 cpdef double sin(double x) noexcept:
     """
     자체 구현 sin(x) (라디안).
@@ -165,18 +384,14 @@ cpdef double sin(double x) noexcept:
 
     ix = high_word(x) & 0x7FFFFFFFU
 
-    # |x| <= π/4: 직접 커널
     if ix <= 0x3FE921FBU:
-        # |x| < 2^-26: x 그대로
         if ix < 0x3E500000U:
             return x
         return _sin_kernel(x, 0.0)
 
-    # NaN, +/-Inf
     if ix >= 0x7FF00000U:
         return x - x  # NaN
 
-    # argument reduction
     n = rem_pio2(x, y)
     q = n & 3
     if q == 0:
@@ -202,7 +417,6 @@ cpdef double cos(double x) noexcept:
     ix = high_word(x) & 0x7FFFFFFFU
 
     if ix <= 0x3FE921FBU:
-        # |x| < 2^-27: 1.0 반환
         if ix < 0x3E46A09EU:
             return 1.0
         return _cos_kernel(x, 0.0)
@@ -235,7 +449,7 @@ cpdef double tan(double x) noexcept:
     ix = high_word(x) & 0x7FFFFFFFU
 
     if ix <= 0x3FE921FBU:
-        if ix < 0x3E400000U:  # |x| < 2^-27
+        if ix < 0x3E400000U:
             return x
         return _tan_kernel(x, 0.0, 0)
 
@@ -250,7 +464,6 @@ cpdef double sec(double x) noexcept:
     """sec(x) = 1 / cos(x)"""
     cdef double c
     c = cos(x)
-    # cos(x) == 0이면 inf (정의되지 않음)
     return 1.0 / c
 
 
@@ -269,40 +482,39 @@ cpdef double cotan(double x) noexcept:
     return c / s
 
 
-# ------------------------------------------------------------------ 복소수 auto-dispatch (방향 A)
-# isinstance 체크를 Cython 레이어에서 수행 → Python def 트램펄린 ~30ns 제거
+# ------------------------------------------------------------------ 복소수 auto-dispatch (방향 A) — cmath 없이 자체 구현
 cpdef object sin_dispatch(object x):
-    """sin: 실수 → cpdef double sin, 복소수 → cmath.sin"""
+    """sin: 실수 → cpdef double sin, 복소수 → 자체 _sin_complex"""
     if type(x) is complex:
-        return _cmath.sin(x)
+        return _sin_complex(<double complex>x)
     return sin(<double>x)
 
 cpdef object cos_dispatch(object x):
-    """cos: 실수 → cpdef double cos, 복소수 → cmath.cos"""
+    """cos: 실수 → cpdef double cos, 복소수 → 자체 _cos_complex"""
     if type(x) is complex:
-        return _cmath.cos(x)
+        return _cos_complex(<double complex>x)
     return cos(<double>x)
 
 cpdef object tan_dispatch(object x):
-    """tan: 실수 → cpdef double tan, 복소수 → cmath.tan"""
+    """tan: 실수 → cpdef double tan, 복소수 → 자체 _tan_complex"""
     if type(x) is complex:
-        return _cmath.tan(x)
+        return _tan_complex(<double complex>x)
     return tan(<double>x)
 
 cpdef object sec_dispatch(object x):
-    """sec: 실수 → cpdef double sec, 복소수 → 1/cmath.cos"""
+    """sec: 실수 → cpdef double sec, 복소수 → 자체 _sec_complex"""
     if type(x) is complex:
-        return 1.0 / _cmath.cos(x)
+        return _sec_complex(<double complex>x)
     return sec(<double>x)
 
 cpdef object cosec_dispatch(object x):
-    """cosec: 실수 → cpdef double cosec, 복소수 → 1/cmath.sin"""
+    """cosec: 실수 → cpdef double cosec, 복소수 → 자체 _cosec_complex"""
     if type(x) is complex:
-        return 1.0 / _cmath.sin(x)
+        return _cosec_complex(<double complex>x)
     return cosec(<double>x)
 
 cpdef object cotan_dispatch(object x):
-    """cotan: 실수 → cpdef double cotan, 복소수 → cmath.cos/cmath.sin"""
+    """cotan: 실수 → cpdef double cotan, 복소수 → 자체 _cotan_complex"""
     if type(x) is complex:
-        return _cmath.cos(x) / _cmath.sin(x)
+        return _cotan_complex(<double complex>x)
     return cotan(<double>x)

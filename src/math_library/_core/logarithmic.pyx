@@ -11,11 +11,9 @@
 #
 # 참조: algorithm_reference.md 섹션 11
 
-from libc.math cimport fma, fabs
+from libc.math cimport fma, fabs, log1p as _log1p
 from libc.stdint cimport int32_t, uint32_t, int64_t, uint64_t
-from ._helpers cimport high_word, low_word, double_to_bits, bits_to_double
-
-import cmath as _cmath
+from ._helpers cimport high_word, low_word, double_to_bits, bits_to_double, _atan2_real, _hypot_real, _make_complex
 
 
 cdef extern from *:
@@ -289,6 +287,14 @@ cpdef double ln(double x) noexcept:
     return _ln_inline(x)
 
 
+cpdef double log1p(double x) noexcept:
+    """
+    log1p(x) = ln(1+x).  소 x에서 수치 안정.
+    libc log1p는 IEEE 헬퍼 허용 목록에 포함 (비트 조작 primitive).
+    """
+    return _log1p(x)
+
+
 cpdef double log(double base, double x) noexcept:
     """log_base(x). Special: base<=0, base==1, x<=0 -> NaN."""
     if x <= 0.0 or base <= 0.0 or base == 1.0:
@@ -300,15 +306,82 @@ cpdef double log(double base, double x) noexcept:
     return ln_x / ln_base
 
 
-# ------------------------------------------------------------------ 복소수 auto-dispatch (방향 A)
+# ------------------------------------------------------------------ 복소수 ln 커널 (자체 구현)
+# ln(a+bi) = 0.5*ln(a^2+b^2) + i*atan2(b, a)
+#           = ln(|z|) + i*arg(z)
+cdef double complex _ln_complex(double complex z) noexcept nogil:
+    """
+    ln(z) = ln(|z|) + i*arg(z)
+    |z| 근방 1 처리: log1p(a^2+b^2-1)/2 로 cancellation 방지.
+    arg(z) = _atan2_real(b, a) — musl 5구간 full arg reduction.
+    """
+    cdef double a = z.real
+    cdef double b = z.imag
+    cdef double r2 = a*a + b*b
+    cdef double ln_r, r
+    cdef double theta = _atan2_real(b, a)
+
+    if r2 > 0.875 and r2 < 1.125:
+        ln_r = 0.5 * _log1p(r2 - 1.0)
+    else:
+        r = _hypot_real(a, b)
+        ln_r = _ln_inline(r)
+
+    return _make_complex(ln_r, theta)
+
+
+cdef double complex _log_complex(double complex base, double complex x) noexcept nogil:
+    """log_base(z) = ln(z) / ln(base)"""
+    cdef double complex ln_x    = _ln_complex(x)
+    cdef double complex ln_base = _ln_complex(base)
+    cdef double denom = ln_base.real * ln_base.real + ln_base.imag * ln_base.imag
+    if denom == 0.0:
+        return _make_complex(1.0 / 0.0, 0.0)
+    return _make_complex(
+        (ln_x.real * ln_base.real + ln_x.imag * ln_base.imag) / denom,
+        (ln_x.imag * ln_base.real - ln_x.real * ln_base.imag) / denom
+    )
+
+
+# ------------------------------------------------------------------ 자동 승격 (실수 → 복소수)
+# ln(x < 0): 복소수 결과
+cdef inline object _ln_promote(double x) noexcept:
+    """ln(x) where x < 0: promote to complex"""
+    # ln(-x) + i*π
+    cdef double ln_abs = _ln_inline(-x)
+    cdef double PI = 3.14159265358979323846e+00
+    return complex(ln_abs, PI)
+
+
+# ------------------------------------------------------------------ 복소수 auto-dispatch (방향 A) — cmath 없이 자체 구현
 cpdef object ln_dispatch(object x):
-    """ln: 실수 → cpdef double ln, 복소수 → cmath.log"""
+    """ln: 실수 → cpdef double ln (x>0), x<0 → 복소수 자동 승격, 복소수 → 자체 _ln_complex"""
+    cdef double xd
     if type(x) is complex:
-        return _cmath.log(x)
-    return _ln_inline(<double>x)
+        return _ln_complex(<double complex>x)
+    xd = <double>x
+    if xd < 0.0:
+        return _ln_promote(xd)
+    return _ln_inline(xd)
 
 cpdef object log_dispatch(object base, object x):
-    """log_base(x): 실수 → cpdef double log, 복소수 → cmath.log(x)/cmath.log(base)"""
+    """log_base(x): 실수/복소수 모두 지원, 자동 승격 포함"""
+    cdef double bd, xd
+    cdef double complex cb, cx
+    # 복소수 분기
     if type(base) is complex or type(x) is complex:
-        return _cmath.log(complex(x)) / _cmath.log(complex(base))
-    return log(<double>base, <double>x)
+        cb = complex(base) if type(base) is not complex else <double complex>base
+        cx = complex(x)    if type(x)    is not complex else <double complex>x
+        return _log_complex(cb, cx)
+    bd = <double>base
+    xd = <double>x
+    # 자동 승격 조건
+    if xd < 0.0:
+        cx = complex(xd, 0.0)
+        cb = complex(bd, 0.0)
+        return _log_complex(cb, cx)
+    if bd < 0.0 and bd != 0.0:
+        cx = complex(xd, 0.0)
+        cb = complex(bd, 0.0)
+        return _log_complex(cb, cx)
+    return log(bd, xd)
