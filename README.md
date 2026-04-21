@@ -17,14 +17,15 @@ Python `math` 모듈의 대체를 목표로 설계한 **Cython 기반 자체 구
 3. [5분 빠른 시작](#3-5분-빠른-시작)
 4. [API 레퍼런스](#4-api-레퍼런스)
 5. [math 모듈 마이그레이션 가이드](#5-math-모듈-마이그레이션-가이드)
-6. [성능 벤치마크](#6-성능-벤치마크)
-7. [정확도 보장](#7-정확도-보장)
-8. [구현 철학](#8-구현-철학)
-9. [프로젝트 구조](#9-프로젝트-구조)
-10. [개발 및 테스트](#10-개발-및-테스트)
-11. [현재 한계 및 TODO](#11-현재-한계-및-todo)
-12. [라이선스](#12-라이선스)
-13. [참고문헌](#13-참고문헌)
+6. [Laplace 변환](#6-laplace-변환)
+7. [성능 벤치마크](#7-성능-벤치마크)
+8. [정확도 보장](#8-정확도-보장)
+9. [구현 철학](#9-구현-철학)
+10. [프로젝트 구조](#10-프로젝트-구조)
+11. [개발 및 테스트](#11-개발-및-테스트)
+12. [현재 한계 및 TODO](#12-현재-한계-및-todo)
+13. [라이선스](#13-라이선스)
+14. [참고문헌](#14-참고문헌)
 
 ---
 
@@ -44,6 +45,7 @@ Python `math` 모듈의 대체를 목표로 설계한 **Cython 기반 자체 구
 | **큰 인수 대응** | Payne-Hanek 구현으로 `sin(1e20)` 등 대규모 인수에서 `math.sin`과 0 ULP 일치 |
 | **추가 특수 함수** | gamma, beta, Bessel J, Legendre, Lambert W, Riemann zeta, Euler φ, Heaviside |
 | **수치 미분** | Ridders-Richardson extrapolation 기반 Differentiation 클래스 (25+ 메서드) |
+| **Laplace 변환 (C++ 백엔드)** | 기호 Laplace 변환·역변환·극점/영점·부분분수·transfer function 합성 (SymPy 의존 없음) |
 
 ---
 
@@ -549,7 +551,114 @@ d = Differentiation(
 
 ---
 
-## 6. 성능 벤치마크
+## 6. Laplace 변환
+
+`math_library.laplace` 는 기호 Laplace 변환 전용 서브패키지입니다.
+C++ AST(Abstract Syntax Tree) 백엔드 위에 Cython 래퍼를 얹은 구조로, SymPy·GiNaC·Pynac 등 외부 CAS에 의존하지 않고 자체 구현합니다.
+상세 사용 방법은 [docs/laplace_guide.md](docs/laplace_guide.md)를 참조하십시오.
+
+### 6.1 설계 철학
+
+| 항목 | 내용 |
+|---|---|
+| **백엔드** | C++17 AST + pool (hash-consing). Cython은 Python ↔ C++ 경계만 담당 |
+| **외부 CAS** | SymPy / GiNaC / Pynac 의존 없음 — 완전 자체 구현 |
+| **성능 목표** | Pynac 대비 1.5~3배 느림(허용), SymPy 대비 50~500배 빠름 (실측 달성) |
+| **기존 회귀** | mathlib 52개+ primitive 전부 기존 동작 유지 |
+
+### 6.2 빠른 시작
+
+```python
+from math_library.laplace import Laplace, t, s, Sin, Exp, const
+
+L = Laplace()
+F = L.transform(Exp(-t) * Sin(2*t))
+print(F)              # ((s + 1)**2 + 4)**-1*2
+print(F.latex())      # \frac{2}{\left(s + 1\right)^{2} + 4}
+print(F.evalf(s=2))   # 0.15384615384615385
+
+f_back = L.inverse(F)
+print(f_back)         # sin(t*2)*exp(t*-1)
+print(L.poles(F))     # [(-1+2j), (-1-2j)]
+G = F.feedback()      # Unity feedback 연결
+print(F.magnitude(1.0))  # 0.447213595499958
+```
+
+### 6.3 지원 함수 목록 (f(t) 형태)
+
+변환 가능한 t-영역 표현식에 사용 가능한 함수:
+
+| 심볼 함수 | 의미 |
+|---|---|
+| `Sin(expr)` | sin |
+| `Cos(expr)` | cos |
+| `Tan(expr)` | tan |
+| `Exp(expr)` | exp (지수) |
+| `Sinh(expr)` | sinh (쌍곡사인) |
+| `Cosh(expr)` | cosh (쌍곡코사인) |
+| `Tanh(expr)` | tanh (쌍곡탄젠트) |
+| `Ln(expr)` | 자연로그 (변환 한정 사용) |
+| `Sqrt(expr)` | 제곱근 |
+| `Arcsin`, `Arccos`, `Arctan` | 역삼각함수 |
+
+산술 연산자 `+`, `-`, `*`, `/`, `**` 및 상수·심볼 조합 모두 지원합니다.
+
+### 6.4 주요 메서드 요약
+
+#### `Laplace` 클래스
+
+| 메서드 | 설명 |
+|---|---|
+| `transform(f)` | F(s) = L{f(t)} |
+| `inverse(F)` | f(t) = L⁻¹{F(s)} (유리함수 한정) |
+| `poles(F)` | 분모 근 (복소수 리스트) |
+| `zeros(F)` | 분자 근 (복소수 리스트) |
+| `final_value(F)` | lim_{s→0} s·F(s), (값, 유효여부) 반환 |
+| `initial_value(F)` | lim_{s→∞} s·F(s), (값, 유효여부) 반환 |
+
+#### `PyExpr` 메서드
+
+| 메서드 | 설명 |
+|---|---|
+| `evalf(**subs)` | 변수 치환 후 수치 평가 |
+| `subs(**kwargs)` | 기호 또는 수치 치환, 새 PyExpr 반환 |
+| `latex()` | LaTeX 문자열 반환 |
+| `diff(var)` | 기호 미분 |
+| `diff_numeric(var_name)` | Ridders 수치 미분 (`LazyDerivative`) |
+| `series(var_name, about, order)` | Taylor 급수 (`TaylorSeries`) |
+| `expand()` | 분배 전개 |
+| `cancel(var)` | 유리식 약분 |
+| `simplify(var)` | expand + cancel |
+| `partial_fractions(var)` | 부분분수 분해 |
+| `series_connect(G)` | 직렬 연결: self * G |
+| `parallel_connect(G)` | 병렬 연결: self + G |
+| `feedback(H=None)` | 피드백 연결: self / (1 + self·H) |
+| `frequency_response(ω)` | H(jω) 계산 |
+| `magnitude(ω)` | \|H(jω)\| |
+| `phase(ω)` | ∠H(jω) [rad] |
+| `lambdify(var_names, backend)` | Python callable 변환 |
+
+### 6.5 성능 요약 (실측값)
+
+| 항목 | 측정값 |
+|---|---|
+| 상수 노드 생성 (`const(2.5)`) | 101 ns |
+| 덧셈 (`a + b`) | 246 ns |
+| hash-consing 조회 | 33 ns |
+| `L{sin(2t)}` forward 변환 | 0.44~1.0 μs |
+| `L{e^(-t)sin(3t)}` forward 변환 | 1.3 μs |
+| 캐시 hit 재변환 | 84 ns |
+| `partial_fractions` (2차 분모) | 8.2 μs |
+| `inverse` (e^{-t}sin(2t)) | 9.5 μs |
+| `lambdify` 컴파일 | 34 μs |
+| `lambdify` 호출 | 79 ns |
+| `diff` (기호 미분) | 11.7 μs |
+| `expand` | 3.5 μs |
+| `cancel` | 34 μs |
+
+---
+
+## 7. 성능 벤치마크 (기본 함수)
 
 ### 측정 환경
 
@@ -602,7 +711,7 @@ python bench/perf_compare.py
 
 ---
 
-## 7. 정확도 보장
+## 8. 정확도 보장
 
 ### ULP 오차 측정 결과
 
@@ -637,7 +746,7 @@ exp(-745) → 5e-324 (subnormal 정상 처리)
 
 ---
 
-## 8. 구현 철학
+## 9. 구현 철학
 
 **자체 구현 원칙**: `libc.math`의 `sin`, `cos`, `exp`, `log` 등 elementary 함수를 직접 호출하지 않습니다.
 musl libc와 fdlibm의 bit-exact 계수를 그대로 인용하여 Cython + Horner-FMA 형태로 재구현합니다.
@@ -659,7 +768,7 @@ musl libc와 fdlibm의 bit-exact 계수를 그대로 인용하여 Cython + Horne
 
 ---
 
-## 9. 프로젝트 구조
+## 10. 프로젝트 구조
 
 ```
 mathlib/
@@ -694,7 +803,26 @@ mathlib/
 │   ├── heaviside_step_function/heaviside.pyx
 │   ├── gcd/gcd.pyx
 │   ├── lcm/lcm.pyx
-│   └── differentiation/differentiation.pyx
+│   ├── differentiation/differentiation.pyx
+│   └── laplace/                        # Laplace 변환 서브패키지 (C++ 백엔드)
+│       ├── __init__.py                 # 공개 API (Laplace, PyExpr, t, s, Sin, ...)
+│       ├── laplace_ast.pyx/.pxd        # PyExpr cdef class + 심볼·상수·함수 팩토리
+│       ├── laplace.pyx                 # Laplace 클래스 (transform/inverse/poles/zeros/...)
+│       ├── lambdify.py                 # AST → Python callable 변환
+│       ├── series.py                   # TaylorSeries 클래스
+│       ├── numeric_diff.py             # LazyDerivative (Ridders 수치 미분 연동)
+│       └── cpp/                        # C++17 AST 코어
+│           ├── pool.hpp/.cpp           # 표현식 풀 (hash-consing)
+│           ├── expr.hpp/.cpp           # AST 노드 정의
+│           ├── laplace.hpp/.cpp        # forward 변환 규칙
+│           ├── inverse.hpp/.cpp        # 역변환 (partial fractions → t-domain)
+│           ├── partial.hpp/.cpp        # 부분분수 분해
+│           ├── polynomial.hpp/.cpp     # 다항식 연산 (Durand-Kerner 포함)
+│           ├── simplify.hpp/.cpp       # expand / cancel
+│           ├── rules.hpp/.cpp          # 변환 규칙 테이블
+│           ├── hash.hpp                # 64-bit Zobrist 해시
+│           ├── subst.hpp               # 기호 치환
+│           └── capi.hpp                # Cython ↔ C++ extern "C" 인터페이스
 ├── bench/
 │   └── perf_compare.py                 # math vs mathlib 속도 비교 벤치마크
 ├── tests/                              # 카테고리별 테스트 스크립트 (18개)
@@ -704,7 +832,8 @@ mathlib/
     ├── cython_best_practices.md        # 빌드 및 Cython 모범 사례
     ├── implementation_spec.md          # 구현 명세
     ├── performance_benchmark.md        # 벤치마크 원본 결과
-    └── verification_report.md          # 검증 보고서
+    ├── verification_report.md          # 검증 보고서
+    └── laplace_guide.md                # Laplace 모듈 상세 사용자 가이드
 ```
 
 패키지 임포트 이름과 dist 이름 모두 `math_library`입니다.
@@ -715,7 +844,7 @@ import math_library as m   # 올바른 임포트
 
 ---
 
-## 10. 개발 및 테스트
+## 11. 개발 및 테스트
 
 ### 빌드
 
@@ -748,7 +877,7 @@ cython -a src/math_library/_core/trigonometric.pyx
 
 ---
 
-## 11. 현재 한계 및 TODO
+## 12. 현재 한계 및 TODO
 
 ### 해결된 항목 (Phase 1/2 완료)
 
@@ -766,9 +895,17 @@ cython -a src/math_library/_core/trigonometric.pyx
 - **lgamma 특정 구간 ULP**: x≈0, -1, -2, ... (극점 근방) 에서 최대 ~256 ULP. 특수 함수 전용 ULP 기준 별도 정의 필요.
 - **zeta(2) 오차**: 구현값 `1.6449340668481436`, 정답 `π²/6 = 1.6449340668482264` (절대오차 8.28e-14, ~370 ULP). 특수 함수 ULP 스펙 미명시로 허용 범위 내로 처리.
 
+### Laplace 모듈 한계 (Phase E 예정)
+
+- **Heaviside / Dirac delta 미지원**: 불연속 신호의 Laplace 변환 미구현.
+- **Non-rational inverse 미지원**: `L⁻¹{F(s)}`는 F(s)가 유리함수인 경우만 동작.
+- **Piecewise 함수 미지원**: 구간별 정의 함수의 변환 미구현.
+- **`collect` 미구현**: `PyExpr.collect(var)` 메서드 Phase E 예정.
+- **`cancel` 비전개 분자/분모**: `(1/(s+1) + 1)**-1 * (s+1)**-1` 형태의 중첩 피드백 표현을 자동 단순화하지 않음 — 수동 `simplify` 필요.
+
 ---
 
-## 12. 라이선스
+## 13. 라이선스
 
 MIT License — `LICENSE` 파일 참조.
 
@@ -776,7 +913,7 @@ MIT License — `LICENSE` 파일 참조.
 
 ---
 
-## 13. 참고문헌
+## 14. 참고문헌
 
 1. **musl libc** — git.musl-libc.org/cgit/musl — sin, cos, exp, log 등 bit-exact 계수 출처
 2. **fdlibm / FreeBSD msun** — 역삼각·쌍곡 함수 계수의 원 출처 (Sun Microsystems)
@@ -784,3 +921,6 @@ MIT License — `LICENSE` 파일 참조.
 4. **Jean-Michel Muller**, "Elementary Functions: Algorithms and Implementation", 3rd ed., Birkhäuser, 2016.
 5. **IEEE 754-2019**, IEEE Standard for Floating-Point Arithmetic.
 6. **RLIBM** — rlibm.github.io, Rutgers University — 구간별 올바른 반올림 라이브러리
+7. **GiNaC** — www.ginac.de — C++ 기호 연산 라이브러리 (설계 참조)
+8. **Pynac** — pynac.org — Sage용 GiNaC 포크 (성능 비교 기준)
+9. **Jean-Marie Toubiana**, "Elementary Methods in Symbolic Computation" — 부분분수·역변환 알고리즘 참조

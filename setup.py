@@ -200,13 +200,86 @@ extensions = [
     ),
 ]
 
+# ------------------------------------------------------------------ Laplace Extension (C++17, Phase A)
+# 기존 C Extension들과 별도로 cythonize하여 language="c++" 충돌 방지
+_laplace_compile_args = (
+    ["-std=c++17", "-O3", "-march=native", "-fno-strict-aliasing"]
+    if _USE_MINGW
+    else ["/std:c++17", "/O2"]
+)
+_laplace_link_args = (
+    [
+        "-static-libgcc",
+        "-static-libstdc++",
+        # libwinpthread 정적 링킹 (DLL 의존성 제거)
+        "-Wl,-Bstatic",
+        "-lpthread",
+        "-Wl,-Bdynamic",
+    ]
+    if _USE_MINGW and sys.platform == "win32"
+    else []
+)
+_laplace_macros = [("MS_WIN64", None)] if sys.platform == "win32" else []
+# SIZEOF_VOID_P가 정의되지 않으면 Cython이 생성하는 코드에서 division-by-zero 발생
+# Python 3.11 (MSVC 빌드) + MinGW 컴파일 조합에서 누락되는 경우 명시 보완
+_laplace_macros += [("SIZEOF_VOID_P", "8")]
+
+laplace_ext = Extension(
+    name="math_library.laplace.laplace_ast",
+    sources=[
+        "src/math_library/laplace/laplace_ast.pyx",
+        "src/math_library/laplace/cpp/expr.cpp",
+        "src/math_library/laplace/cpp/pool.cpp",
+        "src/math_library/laplace/cpp/rules.cpp",
+        "src/math_library/laplace/cpp/laplace.cpp",
+        "src/math_library/laplace/cpp/polynomial.cpp",
+        "src/math_library/laplace/cpp/partial.cpp",
+        "src/math_library/laplace/cpp/inverse.cpp",
+        "src/math_library/laplace/cpp/simplify.cpp",
+    ],
+    language="c++",
+    include_dirs=["src/math_library/laplace/cpp"],
+    extra_compile_args=_laplace_compile_args,
+    extra_link_args=_laplace_link_args,
+    define_macros=_laplace_macros,
+)
+
+laplace_transform_ext = Extension(
+    name="math_library.laplace.laplace",
+    sources=[
+        "src/math_library/laplace/laplace.pyx",
+        "src/math_library/laplace/cpp/expr.cpp",
+        "src/math_library/laplace/cpp/pool.cpp",
+        "src/math_library/laplace/cpp/rules.cpp",
+        "src/math_library/laplace/cpp/laplace.cpp",
+        "src/math_library/laplace/cpp/polynomial.cpp",
+        "src/math_library/laplace/cpp/partial.cpp",
+        "src/math_library/laplace/cpp/inverse.cpp",
+        "src/math_library/laplace/cpp/simplify.cpp",
+    ],
+    language="c++",
+    include_dirs=["src/math_library/laplace/cpp"],
+    extra_compile_args=_laplace_compile_args,
+    extra_link_args=_laplace_link_args,
+    define_macros=_laplace_macros,
+)
+
+laplace_extensions = [laplace_ext, laplace_transform_ext]
+
 
 setup(
     name="math_library",
-    ext_modules=cythonize(
-        extensions,
-        compiler_directives=COMPILER_DIRECTIVES,
-        annotate=False,     # 배포용: HTML 어노테이션 비활성화 (개발 시 True로 변경)
+    ext_modules=(
+        cythonize(
+            extensions,
+            compiler_directives=COMPILER_DIRECTIVES,
+            annotate=False,
+        ) +
+        cythonize(
+            laplace_extensions,
+            compiler_directives=COMPILER_DIRECTIVES,
+            annotate=False,
+        )
     ),
     package_dir={"": "src"},
     packages=[
@@ -229,5 +302,6 @@ setup(
         "math_library.gcd",
         "math_library.lcm",
         "math_library.differentiation",
+        "math_library.laplace",
     ],
 )

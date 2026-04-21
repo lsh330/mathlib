@@ -29,3 +29,6 @@ Thumbs.db
 *.html
 build/
 
+
+# C/C++ 런타임 DLL (시스템에서 제공)
+*.dll
