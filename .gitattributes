@@ -1,0 +1,4 @@
+# Force Windows CRLF line endings for batch/cmd files.
+# cmd.exe cannot reliably parse nested `if` blocks in LF-only scripts.
+*.cmd text eol=crlf
+*.bat text eol=crlf

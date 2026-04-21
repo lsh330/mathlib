@@ -2,9 +2,10 @@
 REM =====================================================================
 REM mathlib MSVC build wrapper for VS 2026 / VS Code / CLI
 REM   1) vswhere.exe locates VS install (auto 2019/2022/2026)
-REM   2) vcvars64.bat activated (skip if VSCMD_VER already set)
-REM   3) DISTUTILS_USE_SDK=1 skips setuptools re-invocation of vcvarsall
-REM   4) python setup.py build_ext --inplace --compiler=msvc -j 8
+REM   2) Force x64 toolchain (override x86 Developer Command Prompt too)
+REM   3) Verify Python is 64-bit (avoid pyatomic_msc.h sizeof mismatch)
+REM   4) DISTUTILS_USE_SDK=1 skips setuptools re-invocation of vcvarsall
+REM   5) python setup.py build_ext --inplace --compiler=msvc -j 8
 REM =====================================================================
 setlocal enableextensions
 
@@ -32,7 +33,17 @@ if not exist "%VCVARS%" (
     exit /b 1
 )
 
-if not defined VSCMD_VER (
+REM Force x64 toolchain. If invoked from a 32-bit Developer Command Prompt
+REM (VSCMD_ARG_TGT_ARCH=x86) the prior environment MUST be overridden —
+REM otherwise cl.exe/link.exe resolve to HostX86\x86 and fail on
+REM pyatomic_msc.h (sizeof(void*)==8 assertions) when building a
+REM 64-bit Python extension.
+set "NEED_VCVARS64=1"
+if defined VSCMD_VER (
+    if /I "%VSCMD_ARG_TGT_ARCH%"=="x64" if /I "%VSCMD_ARG_HOST_ARCH%"=="x64" set "NEED_VCVARS64=0"
+)
+
+if "%NEED_VCVARS64%"=="1" (
     call "%VCVARS%" >nul
     if errorlevel 1 (
         echo [build.cmd] ERROR: vcvars64.bat failed
@@ -51,8 +62,18 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [build.cmd] VS install: %VS_INSTALL%
-python -c "import sys; print('[build.cmd] Python:', sys.executable, sys.version.split()[0])"
+REM Verify Python is 64-bit. A 32-bit Python produces build/temp.win32-*
+REM and cannot link against 64-bit MSVC libraries.
+python -c "import struct,sys; sys.exit(0 if struct.calcsize('P')*8==64 else 1)"
+if errorlevel 1 (
+    echo [build.cmd] ERROR: Python is not 64-bit. Install/use a 64-bit Python 3.x.
+    python -c "import sys,struct; print('  current:', sys.executable, 'bits=', struct.calcsize('P')*8)"
+    exit /b 1
+)
+
+echo [build.cmd] VS install : %VS_INSTALL%
+echo [build.cmd] Target arch: %VSCMD_ARG_TGT_ARCH%  Host arch: %VSCMD_ARG_HOST_ARCH%
+python -c "import sys,struct; print('[build.cmd] Python    :', sys.executable, sys.version.split()[0], str(struct.calcsize('P')*8)+'-bit')"
 
 python setup.py build_ext --inplace -j 8 --compiler=msvc %*
 set "RC=%ERRORLEVEL%"
