@@ -1061,21 +1061,71 @@ y_end = na.predictor_corrector(f, t0, y0, t_end, n=1000, order=4)  # PECE
 
 ## 8. 선형대수 (LinearAlgebra)
 
-`math_library.LinearAlgebra` 클래스는 `np.linalg.*` 없이 Cython 자체 구현된 행렬 분해 알고리즘 9종을 제공합니다.
+`math_library.LinearAlgebra` 클래스는 `np.linalg.*` 없이 Cython 자체 구현된 행렬 분해 및 텐서 연산 알고리즘 **33종**을 제공합니다.
 
 ### 8.1 메서드 목록
+
+#### 분해 (9종)
 
 | 메서드 | 알고리즘 | 반환 | 비고 |
 |---|---|---|---|
 | `lu(A, *, pivot=True)` | Doolittle + partial pivoting | `(P, L, U)` | PA = LU |
 | `ldu(A)` | LU 유도 | `(L, D, U)` | D: 1D 배열 |
-| `qr(A, *, mode='reduced')` | Householder reflections | `(Q, R)` | reduced/complete 모드 |
+| `qr(A, *, mode='reduced', pivot=False)` | Householder reflections | `(Q, R)` 또는 `(Q, R, P)` | reduced/complete/column-pivot |
 | `cholesky(A, *, lower=True)` | Banachiewicz | `L` or `U` | SPD 행렬 전용 |
-| `svd(A, *, full_matrices=False)` | Golub-Reinsch (bidiag + QR shift) | `(U, S, Vt)` | thin/full 모드 |
+| `svd(A, *, full_matrices=False)` | Golub-Reinsch bidiag + QR shift | `(U, S, Vt)` | thin/full 모드 |
 | `gaussian_elimination(A, b, *, form)` | Gauss-Jordan + partial pivoting | RREF 또는 해 `x` | form='rref'/'ref' |
 | `det(A)` | LU 기반 | `float` | sign(P) · prod(diag(U)) |
 | `rank(A, *, tol=None)` | SVD 기반 | `int` | tol 기본: max(m,n)·ε·σ_max |
 | `inverse(A)` | LU 기반 열별 대입 | ndarray | AX=I n 개 선형계 |
+
+#### 소거·직교화·부분공간 (8종)
+
+| 메서드 | 설명 | 반환 |
+|---|---|---|
+| `logdet(A, *, return_sign=False)` | log\|det(A)\| (오버플로 안전) | float 또는 (sign, logabsdet) |
+| `gauss_jordan(A)` | 명시적 RREF | ndarray (m, n) |
+| `gram_schmidt(A)` | 수정 Gram-Schmidt 직교화 | `(Q, R)` |
+| `null_space(A, *, tol=None)` | 우측 영공간 (SVD 기반) | ndarray (n, dim) |
+| `column_space(A, *, tol=None)` | 열공간 (SVD 기반) | ndarray (m, rank) |
+| `row_space(A, *, tol=None)` | 행공간 (SVD 기반) | ndarray (n, rank) |
+| `left_null_space(A, *, tol=None)` | 좌측 영공간 (SVD 기반) | ndarray (m, m-rank) |
+| `pinv(A, *, tol=None)` | Moore-Penrose 의사역행렬 (SVD 기반) | ndarray |
+
+#### 고유값 (5종)
+
+| 메서드 | 알고리즘 | 반환 | 비고 |
+|---|---|---|---|
+| `eigen(A, *, symmetric=False)` | QR + Wilkinson shift (Hessenberg) | `(vals, vecs)` complex128 | 복소 지원 |
+| `diagonalize(A)` | eigen 기반 | `(P, D)` | P^{-1}AP = D |
+| `characteristic_polynomial(A)` | Faddeev-LeVerrier | 1D 배열 (n+1 계수) | p(λ) = det(λI−A) |
+| `cayley_hamilton(A)` | p_A(A) = 0 검증 | ndarray (잔차) | 0 행렬 반환 |
+
+#### 텐서 (5종)
+
+| 메서드 | 설명 | 반환 |
+|---|---|---|
+| `tensor_product(A, B)` | Kronecker product A⊗B (Cython 루프) | ndarray (m·p, n·q) |
+| `outer_product(a, b)` | 벡터 외적 a⊗b | ndarray (m, n) |
+| `inner_product(a, b)` | Hermitian 내적 sum(conj(a)·b) | scalar |
+| `tensor_contract(A, B, axes_a, axes_b)` | 일반 텐서 축약 (reshape/matmul 기반) | ndarray |
+| `tensor_transpose(T, axes=None)` | 텐서 축 재배열 (copy 반환) | ndarray |
+
+#### 대칭 (4종)
+
+| 메서드 | 설명 | 반환 |
+|---|---|---|
+| `is_symmetric(A, tol=1e-10)` | A == A^T 검사 (max-norm) | bool |
+| `is_skew_symmetric(A, tol=1e-10)` | A + A^T ≈ 0 검사 | bool |
+| `symmetrize(A)` | (A + A^H) / 2 (복소 Hermitian 지원) | ndarray |
+| `skew_part(A)` | (A - A^T) / 2 | ndarray |
+
+#### 미분 wrap (2종)
+
+| 메서드 | 설명 | 반환 |
+|---|---|---|
+| `jacobian(f, point)` | Differentiation.jacobian 래핑 — f: R^n → R^m | ndarray (m, n) |
+| `hessian(f, point)` | Differentiation.hessian 래핑 — f: R^n → R | ndarray (n, n) |
 
 ### 8.2 사용 예시
 
@@ -1087,24 +1137,40 @@ la = LinearAlgebra()
 rng = np.random.default_rng(42)
 A = rng.standard_normal((5, 5))
 
-# LU 분해
-P, L, U = la.lu(A)          # PA = LU
-# QR 분해
-Q, R = la.qr(A)             # A = QR
-# SVD
-U_s, S, Vt = la.svd(A)     # A = U diag(S) Vt
-# Cholesky (SPD 행렬)
+# --- 분해 ---
+P, L, U = la.lu(A)           # PA = LU
+Q, R = la.qr(A)              # A = QR
+U_s, S, Vt = la.svd(A)      # A = U diag(S) Vt
 M = A @ A.T + 5*np.eye(5)
-L = la.cholesky(M)          # M = L L^T
-# 선형계 풀기
+L_c = la.cholesky(M)         # M = L L^T
 b = rng.standard_normal(5)
-x = la.gaussian_elimination(A, b)   # Ax = b
-# 행렬식
+x = la.gaussian_elimination(A, b)
 d = la.det(A)
-# 역행렬
 A_inv = la.inverse(A)
-# 랭크
 r = la.rank(A)
+
+# --- 고유값 ---
+vals, vecs = la.eigen(A, symmetric=False)   # 복소 지원
+P_d, D = la.diagonalize(A)                  # A = P D P^{-1}
+coeffs = la.characteristic_polynomial(A)    # len(n+1)
+
+# --- 텐서 ---
+K = la.tensor_product(A, np.eye(3))         # Kronecker product
+O = la.outer_product(np.array([1,2,3.0]), np.array([4,5.0]))
+ip = la.inner_product(np.array([1+2j, 3+4j]), np.array([5+6j, 7+8j]))
+C = la.tensor_contract(A, A, axes_a=1, axes_b=0)   # A @ A
+
+# --- 대칭 ---
+print(la.is_symmetric(M))           # True
+S_sym = la.symmetrize(A)            # (A + A^T)/2
+K_skew = la.skew_part(A)            # (A - A^T)/2
+
+# --- 미분 wrap ---
+def f(x, y): return [x**2 + y, x*y]
+J = la.jacobian(f, [1.0, 2.0])     # shape (2, 2)
+
+def g(x, y): return x**2 + 3*x*y + y**3
+H = la.hessian(g, [1.0, 2.0])      # shape (2, 2), symmetric
 ```
 
 ### 8.3 정확도 (재구성 상대오차 기준)
@@ -1114,16 +1180,21 @@ r = la.rank(A)
 | LU (PA = LU) | ~1e-16 | ~4e-16 | ~1e-15 |
 | QR (A = QR) | ~3e-16 | ~8e-16 | ~1e-15 |
 | Cholesky (A = LL^T) | ~1e-16 | ~3e-16 | ~4e-16 |
-| SVD (A = UΣVt) | ~1e-15 | ~4e-15 | ~6e-15 |
+| SVD (A = USVt) | ~1e-15 | ~4e-15 | ~6e-15 |
 | inverse (AA^{-1} = I) | ~6e-17 | ~4e-16 | ~6e-16 |
+| Kronecker product | ~1e-15 | — | — |
+| tensor_contract (matmul) | ~1e-12 | — | — |
+| jacobian (수치 미분) | ~1e-6 | — | — |
+| hessian (수치 미분) | ~1e-4 | — | — |
 
-### 8.4 성능 (Windows 11, g++ 15.2.0 O3, Intel i7)
+### 8.4 성능 (Windows 11, gcc 15.2.0 O3, Intel i7)
 
 | 알고리즘 | n=100 | n=500 | n=1000 |
 |---|---|---|---|
 | LU | 0.1 ms | 6 ms | 63 ms |
 | Cholesky | 0.5 ms | 6 ms | 59 ms |
-| SVD | 0.5 ms (50×50) | 16 ms (200×200) | — |
+| SVD | 0.5 ms (50x50) | 16 ms (200x200) | — |
+| Kronecker 100x100 | ~400 ms | — | — |
 
 ---
 
