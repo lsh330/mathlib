@@ -694,8 +694,8 @@ print(f_back.evalf(t=2.5))   # 0.606530...  (= e^{-0.5})
 
 ## 7. 수치해석 (NumericalAnalysis)
 
-`math_library.NumericalAnalysis` 클래스는 외부 의존성 없이 Cython 자체 구현된 수치 적분 알고리즘을 제공합니다.
-현재 Simpson 적분법 8종을 지원하며, 향후 수치 미분·비선형 방정식 등 다른 알고리즘이 같은 클래스에 추가될 예정입니다.
+`math_library.NumericalAnalysis` 클래스는 외부 의존성 없이 Cython 자체 구현된 수치해석 알고리즘을 제공합니다.
+Simpson 적분법 8종, 근 찾기 2종(Newton-Raphson, Secant), ODE 적분 5종(Euler, RK2, RK4, DOPRI5, RKF45)으로 총 15개 메서드를 제공합니다.
 
 ### 7.1 빠른 시작
 
@@ -705,20 +705,25 @@ from math_library import NumericalAnalysis
 
 na = NumericalAnalysis()
 
-# 기본 사용
+# --- 적분 ---
 I = na.simpson_13(math.sin, 0, math.pi)                    # ≈ 2.094 (3점 단순)
 I = na.composite_simpson_13(math.sin, 0, math.pi, n=100)   # ≈ 2.0000000108 (합성, n=100)
 I = na.adaptive_simpson(math.sin, 0, math.pi, tol=1e-12)   # = 2.0 (적응형, 오차 < 1e-11)
 I = na.romberg(math.sin, 0, math.pi, depth=6)              # ≈ 2.0 (오차 ≈ 1e-15)
 
-# 오차 추정 함께 반환
-I, err = na.composite_simpson_13(math.sin, 0, math.pi, n=100, return_error=True)
-# (2.000000010824504, 1.08e-08)
+# --- 근 찾기 ---
+root = na.newton_raphson(lambda x: x**2 - 2, 1.5)         # = sqrt(2) ≈ 1.41421356...
+root = na.secant_method(lambda x: x**3 - x - 2, 1.0, 2.0) # ≈ 1.52137970...
 
-# PyExpr 기호 표현식 직접 입력
-from math_library.laplace import Sin, Cos, t
-f = Sin(2*t) * Cos(t)
-I = na.composite_simpson_13(f, 0, math.pi, n=100, var='t')  # ≈ 4/3
+# --- ODE: dy/dt = -y, y(0)=1 ---
+y = na.euler(lambda t, y: -y, 0.0, 1.0, 1.0, n=1000)      # ≈ 0.3677 (오차 1.8e-4)
+y = na.rk4(lambda t, y: -y,   0.0, 1.0, 1.0, n=100)       # ≈ e^(-1) (오차 3e-11)
+y = na.rk45(lambda t, y: -y,  0.0, 1.0, 1.0, tol=1e-10)   # ≈ e^(-1) (오차 1.2e-11)
+
+# --- PyExpr ODE ---
+from math_library.laplace import t, symbol
+y_sym = symbol('y')
+y = na.rk4(-2*t*y_sym, 0.0, 1.0, 1.0, n=200, vars=('t', 'y'))  # y=exp(-t^2)
 ```
 
 ### 7.2 Simpson 적분법 8종
@@ -871,6 +876,140 @@ Richardson 계수(`15 = 2^4 - 1`)로 나눈 추정값을 반환합니다.
 | `composite_simpson_13 n=10000` | 219 µs/call |
 | `adaptive_simpson tol=1e-10` | 29 µs/call |
 | `romberg depth=6` | 1.97 µs/call |
+
+---
+
+### 7.8 근 찾기 (Newton-Raphson / Secant)
+
+#### `newton_raphson(f, x0, *, fprime=None, var='x', tol=1e-10, max_iter=100, return_info=False)`
+
+Newton-Raphson 방법으로 `f(x) = 0`의 근을 찾습니다.
+
+- `fprime=None` (기본): `Differentiation.single_variable(f, x)` 수치 미분 자동 사용
+- `fprime` 명시: callable 또는 PyExpr 모두 허용
+- `return_info=True`: `(root, iter_count, |f(root)|)` 튜플 반환
+
+```python
+na = NumericalAnalysis()
+
+# 기본 (수치 미분 자동)
+root = na.newton_raphson(lambda x: x**2 - 2, 1.5)          # = sqrt(2)
+
+# fprime 명시 (빠른 경로: 0.48 µs/call)
+root = na.newton_raphson(lambda x: x**2 - 2, 1.5, fprime=lambda x: 2*x)
+
+# 상세 정보 반환
+root, iters, residual = na.newton_raphson(lambda x: x**2 - 2, 1.5, return_info=True)
+# root=1.414..., iters=4, residual=4.44e-16
+
+# PyExpr 입력
+from math_library.laplace import symbol
+x = symbol('x')
+root = na.newton_raphson(x**2 - 2, 1.5, var='x')
+```
+
+| 예외 | 조건 |
+|---|---|
+| `ValueError` | `tol <= 0` 또는 `max_iter <= 0` |
+| `ZeroDivisionError` | `f'(x) = 0` 발생 시 |
+| `RuntimeError` | `max_iter` 내 미수렴: `"newton_raphson did not converge in N iterations, |f(x)|=..."` |
+
+#### `secant_method(f, x0, x1, *, var='x', tol=1e-10, max_iter=100, return_info=False)`
+
+도함수 없이 두 초기점으로 근을 찾는 Secant 방법입니다.
+
+```
+x_{n+1} = x_n - f(x_n) * (x_n - x_{n-1}) / (f(x_n) - f(x_{n-1}))
+```
+
+```python
+root = na.secant_method(lambda x: x**3 - x - 2, 1.0, 2.0)  # ≈ 1.52138
+```
+
+---
+
+### 7.9 ODE (Runge-Kutta 계열)
+
+모든 ODE 메서드는 `dy/dt = f(t, y)` 형식의 scalar ODE를 대상으로 합니다.
+
+#### 메서드 요약
+
+| 메서드 | 차수 | 특징 | 오차 (dy/dt=-y, t=0→1, n=100) |
+|---|---|---|---|
+| `euler` | 1 | 고정 step | O(h), ≈ 1.8e-4 (n=1000) |
+| `rk2` | 2 | 고정 step, 3가지 변형 | O(h²), ≈ 6.2e-6 (n=100) |
+| `rk4` | 4 | 고전 RK4, 고정 step | O(h⁴), ≈ 3.1e-11 (n=100) |
+| `rk45` | 5(4) | Dormand-Prince, 적응형 | tol 제어, ≈ 1.2e-11 |
+| `rk_fehlberg` | 5(4) | Fehlberg, 적응형 | tol 제어, ≈ 2.4e-11 |
+
+#### `euler(f, t0, y0, t_end, n, *, vars=('t','y'), return_trajectory=False)`
+
+```python
+y = na.euler(lambda t, y: -y, 0.0, 1.0, 1.0, n=1000)
+traj = na.euler(lambda t, y: -y, 0.0, 1.0, 1.0, n=10, return_trajectory=True)
+# [(0.0, 1.0), (0.1, 0.9), ..., (1.0, y_end)]
+```
+
+#### `rk2(f, t0, y0, t_end, n, *, method='midpoint', vars=('t','y'), return_trajectory=False)`
+
+method: `'midpoint'` (기본) / `'heun'` / `'ralston'`
+
+```python
+y = na.rk2(lambda t, y: -y, 0.0, 1.0, 1.0, n=100, method='heun')
+```
+
+#### `rk4(f, t0, y0, t_end, n, *, vars=('t','y'), return_trajectory=False)`
+
+고전 4차 Runge-Kutta. 고정 step에서 정확도와 성능의 균형이 최적입니다.
+
+```python
+y = na.rk4(lambda t, y: -y, 0.0, 1.0, 1.0, n=100)
+```
+
+#### `rk45(f, t0, y0, t_end, *, tol=1e-8, h_init=None, h_min=1e-12, vars=('t','y'), return_trajectory=False, max_steps=10000)`
+
+Dormand-Prince DOPRI5 적응형. FSAL(First Same As Last) 최적화로 step당 6회 함수 평가.
+
+```python
+y = na.rk45(lambda t, y: -y, 0.0, 1.0, 1.0, tol=1e-10)
+y = na.rk45(lambda t, y: math.sin(t)*y, 0.0, 1.0, 2*math.pi, tol=1e-10)
+```
+
+#### `rk_fehlberg(f, t0, y0, t_end, *, tol=1e-8, h_init=None, h_min=1e-12, vars=('t','y'), return_trajectory=False, max_steps=10000)`
+
+Fehlberg(1969) RKF45. step당 6회 함수 평가.
+
+```python
+y = na.rk_fehlberg(lambda t, y: -y, 0.0, 1.0, 1.0, tol=1e-10)
+```
+
+#### PyExpr ODE 입력
+
+```python
+from math_library.laplace import t, symbol
+
+y_sym = symbol('y')
+# dy/dt = -2*t*y → y = exp(-t^2)
+y = na.rk4(-2*t*y_sym, 0.0, 1.0, 1.0, n=200, vars=('t', 'y'))
+```
+
+#### ODE 예외 처리
+
+| 예외 | 조건 |
+|---|---|
+| `ValueError` | `n < 1`, `t0 >= t_end`, `method` 오류 |
+| `RuntimeError` | `max_steps` 초과, `h underflow` (적응형) |
+
+#### ODE 성능 (Windows 11, MinGW gcc 15.2.0)
+
+| 메서드 | 실측 |
+|---|---|
+| `newton_raphson` (fprime 명시) | 0.48 µs/call |
+| `newton_raphson` (Differentiation 수치 미분) | 18.7 µs/call |
+| `secant_method` | 0.69 µs/call |
+| `rk4 n=1000` | 117 µs/call |
+| `rk45 tol=1e-8` | 2.56 µs/call |
+| `rk_fehlberg tol=1e-8` | 2.69 µs/call |
 
 ---
 

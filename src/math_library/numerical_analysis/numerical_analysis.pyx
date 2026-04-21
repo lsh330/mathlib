@@ -8,7 +8,7 @@
 #
 # numerical_analysis.pyx
 #
-# NumericalAnalysis 클래스 — Simpson 적분법 8종 구현
+# NumericalAnalysis 클래스 — Simpson 적분법 8종 + Newton-Raphson/Secant + RK 5종 구현
 #
 # 구현 목록:
 #   1. simpson_13           — 3점 단순 Simpson 1/3
@@ -19,6 +19,13 @@
 #   6. mixed_simpson        — 혼합 Simpson (임의 n >= 2)
 #   7. simpson_irregular    — 불균등 간격 Simpson
 #   8. romberg              — Romberg 적분 (Richardson 확장)
+#   9. newton_raphson       — Newton-Raphson 근 찾기 (Differentiation 재활용)
+#  10. secant_method        — Secant 근 찾기
+#  11. euler                — Euler 1차 ODE 적분
+#  12. rk2                  — 2차 Runge-Kutta (midpoint/heun/ralston)
+#  13. rk4                  — 고전 4차 Runge-Kutta
+#  14. rk45                 — Dormand-Prince 5(4) 적응형 (DOPRI5/FSAL)
+#  15. rk_fehlberg          — Fehlberg RKF45 적응형
 
 from libc.math cimport fabs, isnan, isinf
 include "_kahan.pxd"
@@ -43,6 +50,24 @@ cdef object _resolve_callable(object f, str var):
         return f
     raise TypeError(
         f"f must be callable or have lambdify method, got {type(f).__name__}"
+    )
+
+
+cdef object _resolve_callable_2var(object f, str var1, str var2):
+    """
+    2변수 함수 f(var1, var2) 해석.
+    PyExpr이면 evalf(**{var1: v1, var2: v2}) 래퍼 반환.
+    callable이면 그대로 반환.
+    """
+    if hasattr(f, 'evalf'):
+        _f = f
+        _v1 = var1
+        _v2 = var2
+        return lambda v1, v2, _f=_f, _v1=_v1, _v2=_v2: _f.evalf(**{_v1: v1, _v2: v2})
+    if callable(f):
+        return f
+    raise TypeError(
+        f"f must be callable or have evalf method, got {type(f).__name__}"
     )
 
 
@@ -93,6 +118,15 @@ cdef double _composite_13_raw(object f, double a, double b, int n) except? -1.79
     return (h / 3.0) * (_call_f(f, a) + 4.0 * s_odd_val + 2.0 * s_even_val + _call_f(f, b))
 
 
+cdef inline double _rk4_step(object f, double t, double y, double h) noexcept:
+    """단일 RK4 step. Python callable 호출은 GIL 필요 (nogil 불가)."""
+    cdef double k1 = f(t, y)
+    cdef double k2 = f(t + 0.5 * h, y + 0.5 * h * k1)
+    cdef double k3 = f(t + 0.5 * h, y + 0.5 * h * k2)
+    cdef double k4 = f(t + h, y + h * k3)
+    return y + h * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
+
+
 cdef double _trapezoidal_recursive(object f, double a, double b,
                                     int level, double prev_T) except? -1.7976931348623157e+308:
     """
@@ -136,7 +170,8 @@ cdef class NumericalAnalysis:
     """
 
     def __init__(self):
-        pass
+        from math_library import Differentiation
+        self._differ = Differentiation()
 
     # ------------------------------------------------------------------ 1. simpson_13
 
@@ -677,3 +712,559 @@ cdef class NumericalAnalysis:
             err = fabs(result - <double>T[depth][depth - 1]) if depth >= 1 else 0.0
             return (result, err)
         return result
+
+    # ------------------------------------------------------------------ 9. newton_raphson
+
+    def newton_raphson(self, f, double x0, *, fprime=None, str var='x',
+                       double tol=1e-10, int max_iter=100, bint return_info=False):
+        """
+        Newton-Raphson 근 찾기.
+
+        x_{n+1} = x_n - f(x_n) / f'(x_n)
+
+        반복 종료: |x_new - x_old| < tol  또는  |f(x_new)| < tol
+
+        Parameters
+        ----------
+        f         : callable 또는 PyExpr
+        x0        : float  초기 추정값
+        fprime    : callable, PyExpr, 또는 None.
+                    None이면 Differentiation.single_variable(f, x)로 수치 미분 사용.
+        var       : str    PyExpr 변수명 (기본 'x')
+        tol       : float  수렴 허용 오차 (> 0)
+        max_iter  : int    최대 반복 횟수 (> 0)
+        return_info : bool  True이면 (root, iter_count, residual) 튜플 반환
+
+        Returns
+        -------
+        float 또는 (float, int, float)
+
+        Raises
+        ------
+        ValueError       tol <= 0 또는 max_iter <= 0
+        TypeError        f가 callable이 아닌 경우
+        ZeroDivisionError f'(x) == 0 (발산 위험)
+        RuntimeError     max_iter 내 미수렴
+        """
+        if tol <= 0.0:
+            raise ValueError(f"tol must be positive, got tol={tol}")
+        if max_iter <= 0:
+            raise ValueError(f"max_iter must be positive, got max_iter={max_iter}")
+
+        cdef object _f = _resolve_callable(f, var)
+        cdef object _fp
+
+        if fprime is None:
+            # Differentiation.single_variable 재활용
+            _differ_ref = self._differ
+            _fp = lambda x, _d=_differ_ref, _fn=_f: _d.single_variable(_fn, x)
+        else:
+            _fp = _resolve_callable(fprime, var)
+
+        cdef double x = x0
+        cdef double x_new, fx, fpx
+        cdef int it
+
+        for it in range(max_iter):
+            fx = <double>_f(x)
+            fpx = <double>_fp(x)
+            if fpx == 0.0:
+                raise ZeroDivisionError(
+                    f"newton_raphson: f'(x)=0 at x={x}, iteration={it}"
+                )
+            x_new = x - fx / fpx
+            if fabs(x_new - x) < tol or fabs(fx) < tol:
+                x = x_new
+                if return_info:
+                    return (x, it + 1, fabs(<double>_f(x)))
+                return x
+            x = x_new
+        else:
+            raise RuntimeError(
+                f"newton_raphson did not converge in {max_iter} iterations, "
+                f"|f(x)|={fabs(<double>_f(x)):.2e}"
+            )
+
+    # ------------------------------------------------------------------ 10. secant_method
+
+    def secant_method(self, f, double x0, double x1, *, str var='x',
+                      double tol=1e-10, int max_iter=100, bint return_info=False):
+        """
+        Secant 근 찾기 (도함수 없음, 유한차분).
+
+        x_{n+1} = x_n - f(x_n) * (x_n - x_{n-1}) / (f(x_n) - f(x_{n-1}))
+
+        Parameters
+        ----------
+        f         : callable 또는 PyExpr
+        x0, x1    : float  초기 두 추정값
+        var       : str    PyExpr 변수명 (기본 'x')
+        tol       : float  수렴 허용 오차 (> 0)
+        max_iter  : int    최대 반복 횟수 (> 0)
+        return_info : bool True이면 (root, iter_count, residual) 반환
+
+        Returns
+        -------
+        float 또는 (float, int, float)
+
+        Raises
+        ------
+        ValueError       tol <= 0 또는 max_iter <= 0
+        TypeError        f가 callable이 아닌 경우
+        ZeroDivisionError f(x1) - f(x0) == 0
+        RuntimeError     max_iter 내 미수렴
+        """
+        if tol <= 0.0:
+            raise ValueError(f"tol must be positive, got tol={tol}")
+        if max_iter <= 0:
+            raise ValueError(f"max_iter must be positive, got max_iter={max_iter}")
+
+        cdef object _f = _resolve_callable(f, var)
+        cdef double xa = x0, xb = x1
+        cdef double fa = <double>_f(xa)
+        cdef double fb = <double>_f(xb)
+        cdef double x_new, df
+        cdef int it
+
+        for it in range(max_iter):
+            df = fb - fa
+            if df == 0.0:
+                raise ZeroDivisionError(
+                    f"secant_method: f(x1)-f(x0)=0 at x0={xa}, x1={xb}, iteration={it}"
+                )
+            x_new = xb - fb * (xb - xa) / df
+            xa = xb
+            fa = fb
+            xb = x_new
+            fb = <double>_f(xb)
+            if fabs(xb - xa) < tol or fabs(fb) < tol:
+                if return_info:
+                    return (xb, it + 1, fabs(fb))
+                return xb
+        else:
+            raise RuntimeError(
+                f"secant_method did not converge in {max_iter} iterations, "
+                f"|f(x)|={fabs(fb):.2e}"
+            )
+
+    # ------------------------------------------------------------------ 11. euler
+
+    def euler(self, f, double t0, double y0, double t_end, int n, *,
+              vars=('t', 'y'), bint return_trajectory=False):
+        """
+        Euler 1차 ODE 적분.
+
+        h = (t_end - t0) / n
+        y_{n+1} = y_n + h * f(t_n, y_n)
+
+        Parameters
+        ----------
+        f                : callable f(t, y) 또는 PyExpr (2변수)
+        t0               : float  초기 시간
+        y0               : float  초기 상태
+        t_end            : float  종료 시간 (> t0)
+        n                : int    스텝 수 (>= 1)
+        vars             : tuple  PyExpr 변수명 (t변수명, y변수명). 기본 ('t', 'y')
+        return_trajectory: bool   True이면 [(t0,y0), ..., (t_n,y_n)] 반환
+
+        Returns
+        -------
+        float 또는 list of (float, float)
+
+        Raises
+        ------
+        ValueError  n < 1 또는 t0 >= t_end
+        TypeError   f가 callable이 아닌 경우
+        """
+        if n < 1:
+            raise ValueError(f"euler requires n >= 1, got n={n}")
+        if t0 >= t_end:
+            raise ValueError(f"t0 must be less than t_end, got t0={t0}, t_end={t_end}")
+
+        cdef object _f = _resolve_callable_2var(f, vars[0], vars[1])
+        cdef double h = (t_end - t0) / n
+        cdef double t = t0
+        cdef double y = y0
+        cdef int i
+        cdef list traj
+
+        if return_trajectory:
+            traj = [(t, y)]
+            for i in range(n):
+                y = y + h * <double>_f(t, y)
+                t = t0 + (i + 1) * h
+                traj.append((t, y))
+            return traj
+
+        for i in range(n):
+            y = y + h * <double>_f(t, y)
+            t = t0 + (i + 1) * h
+        return y
+
+    # ------------------------------------------------------------------ 12. rk2
+
+    def rk2(self, f, double t0, double y0, double t_end, int n, *,
+            str method='midpoint', vars=('t', 'y'), bint return_trajectory=False):
+        """
+        2차 Runge-Kutta ODE 적분.
+
+        method 선택:
+          'midpoint' (기본): k1=f(t,y), k2=f(t+h/2, y+h*k1/2), y_new=y+h*k2
+          'heun':            k1=f(t,y), k2=f(t+h, y+h*k1),     y_new=y+h*(k1+k2)/2
+          'ralston':         k1=f(t,y), k2=f(t+2h/3, y+2h*k1/3), y_new=y+h*(k1/4+3*k2/4)
+
+        Parameters
+        ----------
+        f                : callable f(t, y) 또는 PyExpr
+        t0               : float  초기 시간
+        y0               : float  초기 상태
+        t_end            : float  종료 시간
+        n                : int    스텝 수 (>= 1)
+        method           : str    'midpoint', 'heun', 'ralston'
+        vars             : tuple  PyExpr 변수명
+        return_trajectory: bool
+
+        Returns
+        -------
+        float 또는 list of (float, float)
+
+        Raises
+        ------
+        ValueError  method가 3개 중 하나가 아님, n < 1, t0 >= t_end
+        """
+        if n < 1:
+            raise ValueError(f"rk2 requires n >= 1, got n={n}")
+        if t0 >= t_end:
+            raise ValueError(f"t0 must be less than t_end, got t0={t0}, t_end={t_end}")
+        if method not in ('midpoint', 'heun', 'ralston'):
+            raise ValueError(
+                f"rk2 method must be 'midpoint', 'heun', or 'ralston', got '{method}'"
+            )
+
+        cdef object _f = _resolve_callable_2var(f, vars[0], vars[1])
+        cdef double h = (t_end - t0) / n
+        cdef double t = t0
+        cdef double y = y0
+        cdef double k1, k2, y_new
+        cdef int i
+        cdef list traj
+
+        if return_trajectory:
+            traj = [(t, y)]
+
+        for i in range(n):
+            k1 = <double>_f(t, y)
+            if method == 'midpoint':
+                k2 = <double>_f(t + 0.5 * h, y + 0.5 * h * k1)
+                y_new = y + h * k2
+            elif method == 'heun':
+                k2 = <double>_f(t + h, y + h * k1)
+                y_new = y + h * (k1 + k2) * 0.5
+            else:  # ralston
+                k2 = <double>_f(t + (2.0 / 3.0) * h, y + (2.0 / 3.0) * h * k1)
+                y_new = y + h * (0.25 * k1 + 0.75 * k2)
+            y = y_new
+            t = t0 + (i + 1) * h
+            if return_trajectory:
+                traj.append((t, y))
+
+        if return_trajectory:
+            return traj
+        return y
+
+    # ------------------------------------------------------------------ 13. rk4
+
+    def rk4(self, f, double t0, double y0, double t_end, int n, *,
+            vars=('t', 'y'), bint return_trajectory=False):
+        """
+        고전 4차 Runge-Kutta ODE 적분.
+
+        k1 = f(t, y)
+        k2 = f(t+h/2, y+h*k1/2)
+        k3 = f(t+h/2, y+h*k2/2)
+        k4 = f(t+h,   y+h*k3)
+        y_new = y + h*(k1 + 2*k2 + 2*k3 + k4)/6
+
+        Parameters
+        ----------
+        f                : callable f(t, y) 또는 PyExpr
+        t0               : float  초기 시간
+        y0               : float  초기 상태
+        t_end            : float  종료 시간
+        n                : int    스텝 수 (>= 1)
+        vars             : tuple  PyExpr 변수명
+        return_trajectory: bool
+
+        Returns
+        -------
+        float 또는 list of (float, float)
+
+        Raises
+        ------
+        ValueError  n < 1 또는 t0 >= t_end
+        """
+        if n < 1:
+            raise ValueError(f"rk4 requires n >= 1, got n={n}")
+        if t0 >= t_end:
+            raise ValueError(f"t0 must be less than t_end, got t0={t0}, t_end={t_end}")
+
+        cdef object _f = _resolve_callable_2var(f, vars[0], vars[1])
+        cdef double h = (t_end - t0) / n
+        cdef double t = t0
+        cdef double y = y0
+        cdef int i
+        cdef list traj
+
+        if return_trajectory:
+            traj = [(t, y)]
+            for i in range(n):
+                y = _rk4_step(_f, t, y, h)
+                t = t0 + (i + 1) * h
+                traj.append((t, y))
+            return traj
+
+        for i in range(n):
+            y = _rk4_step(_f, t, y, h)
+            t = t0 + (i + 1) * h
+        return y
+
+    # ------------------------------------------------------------------ 14. rk45 (Dormand-Prince DOPRI5)
+
+    def rk45(self, f, double t0, double y0, double t_end, *,
+             double tol=1e-8, h_init=None, double h_min=1e-12,
+             vars=('t', 'y'), bint return_trajectory=False, int max_steps=10000):
+        """
+        Dormand-Prince RK45 적응형 ODE 적분 (DOPRI5/FSAL).
+
+        scipy/MATLAB ode45의 기본 알고리즘.
+        5차 해와 4차 해의 차이로 오차 추정, step 크기 자동 조정.
+
+        Parameters
+        ----------
+        f                : callable f(t, y) 또는 PyExpr
+        t0               : float  초기 시간
+        y0               : float  초기 상태
+        t_end            : float  종료 시간
+        tol              : float  허용 오차 (기본 1e-8)
+        h_init           : float 또는 None. None이면 (t_end-t0)/100
+        h_min            : float  최소 step 크기 (기본 1e-12)
+        vars             : tuple  PyExpr 변수명
+        return_trajectory: bool
+        max_steps        : int    최대 스텝 수 (기본 10000)
+
+        Returns
+        -------
+        float 또는 list of (float, float)
+
+        Raises
+        ------
+        ValueError  t0 >= t_end
+        RuntimeError max_steps 초과, h underflow
+        """
+        if t0 >= t_end:
+            raise ValueError(f"t0 must be less than t_end, got t0={t0}, t_end={t_end}")
+
+        cdef object _f = _resolve_callable_2var(f, vars[0], vars[1])
+
+        # Dormand-Prince Butcher tableau 상수
+        # c
+        cdef double c2 = 0.2, c3 = 0.3, c4 = 0.8, c5 = 8.0/9.0
+        # a (하삼각)
+        cdef double a21 = 0.2
+        cdef double a31 = 3.0/40.0,    a32 = 9.0/40.0
+        cdef double a41 = 44.0/45.0,   a42 = -56.0/15.0,    a43 = 32.0/9.0
+        cdef double a51 = 19372.0/6561.0, a52 = -25360.0/2187.0, a53 = 64448.0/6561.0, a54 = -212.0/729.0
+        cdef double a61 = 9017.0/3168.0,  a62 = -355.0/33.0,    a63 = 46732.0/5247.0
+        cdef double a64 = 49.0/176.0,     a65 = -5103.0/18656.0
+        # b (5차)
+        cdef double b1 = 35.0/384.0,  b3 = 500.0/1113.0, b4 = 125.0/192.0
+        cdef double b5 = -2187.0/6784.0, b6 = 11.0/84.0
+        # b* (4차, 오차 추정용)
+        cdef double e1 = 71.0/57600.0, e3 = -71.0/16695.0, e4 = 71.0/1920.0
+        cdef double e5 = -17253.0/339200.0, e6 = 22.0/525.0, e7 = -1.0/40.0
+
+        cdef double h = (t_end - t0) / 100.0 if h_init is None else <double>h_init
+        cdef double t = t0
+        cdef double y = y0
+        cdef double k1, k2, k3, k4, k5, k6, k7
+        cdef double y5, err_est
+        cdef double h_new
+        cdef int step_count = 0
+        cdef list traj
+
+        if return_trajectory:
+            traj = [(t, y)]
+
+        # FSAL: 첫 k1 계산
+        k1 = <double>_f(t, y)
+
+        while t < t_end:
+            if step_count >= max_steps:
+                raise RuntimeError(
+                    f"rk45 exceeded max_steps={max_steps} at t={t:.6g}"
+                )
+            step_count += 1
+
+            # 마지막 step 축소
+            if t + h > t_end:
+                h = t_end - t
+
+            # k2 ~ k6
+            k2 = <double>_f(t + c2 * h,  y + h * (a21 * k1))
+            k3 = <double>_f(t + c3 * h,  y + h * (a31 * k1 + a32 * k2))
+            k4 = <double>_f(t + c4 * h,  y + h * (a41 * k1 + a42 * k2 + a43 * k3))
+            k5 = <double>_f(t + c5 * h,  y + h * (a51 * k1 + a52 * k2 + a53 * k3 + a54 * k4))
+            k6 = <double>_f(t + h,        y + h * (a61 * k1 + a62 * k2 + a63 * k3 + a64 * k4 + a65 * k5))
+
+            # 5차 해
+            y5 = y + h * (b1 * k1 + b3 * k3 + b4 * k4 + b5 * k5 + b6 * k6)
+
+            # k7 (FSAL: 다음 step의 k1)
+            k7 = <double>_f(t + h, y5)
+
+            # 오차 추정 (5차 - 4차 = b - b*)
+            # err = h * sum((b_i - b*_i) * k_i)  (단순화 공식)
+            err_est = fabs(h * (e1 * k1 + e3 * k3 + e4 * k4 + e5 * k5 + e6 * k6 + e7 * k7))
+
+            if err_est < tol or h <= h_min:
+                # step 수락
+                t = t + h
+                y = y5
+                k1 = k7  # FSAL
+
+                if return_trajectory:
+                    traj.append((t, y))
+
+            # step 크기 조정
+            if err_est > 0.0:
+                h_new = h * 0.9 * (tol / err_est) ** 0.2
+                if h_new > 5.0 * h:
+                    h_new = 5.0 * h
+                if h_new < 0.1 * h:
+                    h_new = 0.1 * h
+                h = h_new
+            # else: err_est == 0이면 h 유지
+
+            if h < h_min and t < t_end:
+                raise RuntimeError(
+                    f"rk45: step size h={h:.2e} underflow at t={t:.6g}"
+                )
+
+        if return_trajectory:
+            return traj
+        return y
+
+    # ------------------------------------------------------------------ 15. rk_fehlberg (RKF45)
+
+    def rk_fehlberg(self, f, double t0, double y0, double t_end, *,
+                    double tol=1e-8, h_init=None, double h_min=1e-12,
+                    vars=('t', 'y'), bint return_trajectory=False, int max_steps=10000):
+        """
+        Fehlberg RKF45 적응형 ODE 적분.
+
+        6-stage 5(4) 방법. rk45(DOPRI5)와 유사하나 다른 Butcher tableau.
+        Fehlberg(1969) 원래 계수 사용.
+
+        Parameters
+        ----------
+        f                : callable f(t, y) 또는 PyExpr
+        t0               : float  초기 시간
+        y0               : float  초기 상태
+        t_end            : float  종료 시간
+        tol              : float  허용 오차 (기본 1e-8)
+        h_init           : float 또는 None
+        h_min            : float  최소 step 크기
+        vars             : tuple  PyExpr 변수명
+        return_trajectory: bool
+        max_steps        : int    최대 스텝 수
+
+        Returns
+        -------
+        float 또는 list of (float, float)
+
+        Raises
+        ------
+        ValueError   t0 >= t_end
+        RuntimeError max_steps 초과, h underflow
+        """
+        if t0 >= t_end:
+            raise ValueError(f"t0 must be less than t_end, got t0={t0}, t_end={t_end}")
+
+        cdef object _f = _resolve_callable_2var(f, vars[0], vars[1])
+
+        # Fehlberg Butcher tableau
+        # c
+        cdef double c2 = 0.25, c3 = 3.0/8.0, c4 = 12.0/13.0, c5 = 1.0, c6 = 0.5
+        # a
+        cdef double a21 = 0.25
+        cdef double a31 = 3.0/32.0,      a32 = 9.0/32.0
+        cdef double a41 = 1932.0/2197.0, a42 = -7200.0/2197.0, a43 = 7296.0/2197.0
+        cdef double a51 = 439.0/216.0,   a52 = -8.0,           a53 = 3680.0/513.0,   a54 = -845.0/4104.0
+        cdef double a61 = -8.0/27.0,     a62 = 2.0,            a63 = -3544.0/2565.0, a64 = 1859.0/4104.0, a65 = -11.0/40.0
+        # b5 (5차 해)
+        cdef double b1 = 16.0/135.0,  b3 = 6656.0/12825.0, b4 = 28561.0/56430.0, b5 = -9.0/50.0, b6 = 2.0/55.0
+        # b4 (4차 해)
+        cdef double d1 = 25.0/216.0,  d3 = 1408.0/2565.0,  d4 = 2197.0/4104.0,   d5 = -0.2
+
+        cdef double h = (t_end - t0) / 100.0 if h_init is None else <double>h_init
+        cdef double t = t0
+        cdef double y = y0
+        cdef double k1, k2, k3, k4, k5, k6
+        cdef double y5, y4, err_est
+        cdef double h_new
+        cdef int step_count = 0
+        cdef list traj
+
+        if return_trajectory:
+            traj = [(t, y)]
+
+        while t < t_end:
+            if step_count >= max_steps:
+                raise RuntimeError(
+                    f"rk_fehlberg exceeded max_steps={max_steps} at t={t:.6g}"
+                )
+            step_count += 1
+
+            # 마지막 step 축소
+            if t + h > t_end:
+                h = t_end - t
+
+            k1 = <double>_f(t,              y)
+            k2 = <double>_f(t + c2 * h,     y + h * (a21 * k1))
+            k3 = <double>_f(t + c3 * h,     y + h * (a31 * k1 + a32 * k2))
+            k4 = <double>_f(t + c4 * h,     y + h * (a41 * k1 + a42 * k2 + a43 * k3))
+            k5 = <double>_f(t + c5 * h,     y + h * (a51 * k1 + a52 * k2 + a53 * k3 + a54 * k4))
+            k6 = <double>_f(t + c6 * h,     y + h * (a61 * k1 + a62 * k2 + a63 * k3 + a64 * k4 + a65 * k5))
+
+            # 5차 해
+            y5 = y + h * (b1 * k1 + b3 * k3 + b4 * k4 + b5 * k5 + b6 * k6)
+            # 4차 해 (오차 추정용)
+            y4 = y + h * (d1 * k1 + d3 * k3 + d4 * k4 + d5 * k5)
+
+            err_est = fabs(y5 - y4)
+
+            if err_est < tol or h <= h_min:
+                # step 수락 (5차 해 사용)
+                t = t + h
+                y = y5
+
+                if return_trajectory:
+                    traj.append((t, y))
+
+            # step 크기 조정
+            if err_est > 0.0:
+                h_new = h * 0.9 * (tol / err_est) ** 0.2
+                if h_new > 5.0 * h:
+                    h_new = 5.0 * h
+                if h_new < 0.1 * h:
+                    h_new = 0.1 * h
+                h = h_new
+
+            if h < h_min and t < t_end:
+                raise RuntimeError(
+                    f"rk_fehlberg: step size h={h:.2e} underflow at t={t:.6g}"
+                )
+
+        if return_trajectory:
+            return traj
+        return y

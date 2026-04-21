@@ -1,7 +1,9 @@
 # NumericalAnalysis 상세 사용자 가이드
 
-`math_library.NumericalAnalysis` 클래스의 Simpson 적분법 8종에 대한 수학적 배경,
+`math_library.NumericalAnalysis` 클래스의 15개 메서드에 대한 수학적 배경,
 구현 세부사항, 정확도 특성, 예외 처리, 성능 최적화를 설명합니다.
+
+Simpson 적분법 8종 외에 Newton-Raphson / Secant 근 찾기 2종, Euler / RK2 / RK4 / DOPRI5 / RKF45 ODE 5종이 추가되었습니다.
 
 ---
 
@@ -23,6 +25,9 @@
 14. [예외 처리 완전 참조](#14-예외-처리-완전-참조)
 15. [성능 특성](#15-성능-특성)
 16. [수학적 배경](#16-수학적-배경)
+17. [Newton-Raphson / Secant 근 찾기](#17-newton-raphson--secant-근-찾기)
+18. [Runge-Kutta 계열 ODE 적분](#18-runge-kutta-계열-ode-적분)
+19. [Differentiation 재활용 설계 원리](#19-differentiation-재활용-설계-원리)
 
 ---
 
@@ -697,3 +702,229 @@ I = (h0+h1)/6 * [(2h0+h1)/h0 * f0 - (h0+h1)^2/(h0*h1) * f1*(-1) + ...]
 
 계수 확인: h0=h1=h이면 `(2-1)*f0 + (2h)^2/h^2*f1 + (2-1)*f2 = f0 + 4f1 + f2`,
 이를 `(2h)/6 = h/3`으로 곱하면 표준 Simpson 1/3이 됩니다.
+
+---
+
+## 17. Newton-Raphson / Secant 근 찾기
+
+### 17.1 Newton-Raphson 알고리즘
+
+`f(x) = 0`의 근을 2차 수렴 속도로 찾습니다.
+
+```
+x_{n+1} = x_n - f(x_n) / f'(x_n)
+```
+
+수렴 조건 (둘 중 하나):
+- `|x_{n+1} - x_n| < tol`
+- `|f(x_{n+1})| < tol`
+
+#### 시그니처
+
+```python
+newton_raphson(f, x0, *, fprime=None, var='x', tol=1e-10, max_iter=100, return_info=False)
+```
+
+#### Differentiation 재활용
+
+`fprime=None`(기본)일 때 `Differentiation.single_variable(f, x)`을 내부 호출합니다.
+이 메서드는 Ridders-Richardson extrapolation으로 1계 도함수를 추정합니다.
+
+```
+_fp = lambda x: self._differ.single_variable(_f, x)
+```
+
+`fprime`을 명시하면 Differentiation 호출을 생략하여 **~40배 빠른 경로**가 활성화됩니다:
+- `fprime=None` 경로: ~18.7 µs/call (Ridders extrapolation 10회 f 평가 포함)
+- `fprime=lambda x: 2*x` 경로: ~0.48 µs/call
+
+#### 반환
+
+- 기본: `root` (float)
+- `return_info=True`: `(root, iter_count, |f(root)|)` 튜플
+
+예시:
+```python
+root = na.newton_raphson(lambda x: x**2 - 2, 1.5)
+# 4회 반복, residual = 4.44e-16
+
+root, iters, res = na.newton_raphson(lambda x: x**2 - 2, 1.5, return_info=True)
+# (1.4142135623730951, 4, 4.440892098500626e-16)
+```
+
+#### 예외
+
+| 예외 | 조건 | 메시지 예시 |
+|---|---|---|
+| `ValueError` | `tol <= 0` | `"tol must be positive, got tol=-1.0"` |
+| `ValueError` | `max_iter <= 0` | `"max_iter must be positive, got max_iter=0"` |
+| `ZeroDivisionError` | `f'(x)=0` | `"newton_raphson: f'(x)=0 at x=0.0, iteration=0"` |
+| `RuntimeError` | 미수렴 | `"newton_raphson did not converge in 3 iterations, |f(x)|=1.56e+02"` |
+
+#### 수렴 이론
+
+2차 수렴: `|x_{n+1} - x*| ≤ C |x_n - x*|²`
+
+단, `f'(x*)` ≠ 0이고 초기값 x0가 근 근방에 있어야 합니다.
+`x0`가 근에서 멀거나 `f'`가 0에 가까우면 발산합니다.
+
+### 17.2 Secant 메서드 알고리즘
+
+도함수 없이 두 점으로 유한차분 근사:
+
+```
+x_{n+1} = x_n - f(x_n) * (x_n - x_{n-1}) / (f(x_n) - f(x_{n-1}))
+```
+
+Newton-Raphson보다 느린 1.618차 수렴이지만, `f'` 계산이 필요 없습니다.
+
+```python
+root = na.secant_method(lambda x: x**3 - x - 2, 1.0, 2.0)
+# 7회 반복, 오차 3.55e-15
+```
+
+---
+
+## 18. Runge-Kutta 계열 ODE 적분
+
+`dy/dt = f(t, y)` 형식의 scalar ODE를 수치 적분합니다.
+
+### 18.1 Butcher Tableau 개요
+
+모든 Runge-Kutta 방법은 Butcher tableau `(c, a, b)`로 정의됩니다:
+
+```
+k_i = f(t + c_i * h,  y + h * sum_j(a_{ij} * k_j))
+y_{n+1} = y_n + h * sum_i(b_i * k_i)
+```
+
+| 방법 | stage 수 | 차수 | 고정/적응형 |
+|---|---|---|---|
+| Euler | 1 | 1 | 고정 |
+| RK2-midpoint | 2 | 2 | 고정 |
+| RK2-Heun | 2 | 2 | 고정 |
+| RK2-Ralston | 2 | 2 | 고정 |
+| RK4 | 4 | 4 | 고정 |
+| DOPRI5 (rk45) | 7 (FSAL) | 5(4) | 적응형 |
+| Fehlberg (rk_fehlberg) | 6 | 5(4) | 적응형 |
+
+### 18.2 Euler
+
+```
+y_{n+1} = y_n + h * f(t_n, y_n)
+```
+
+1차 방법. 오차 O(h). `n=1000`에서 오차 ~1.8e-4.
+
+### 18.3 RK2 (3종)
+
+**midpoint**: `k2 = f(t + h/2, y + h*k1/2)`, `y_new = y + h*k2`
+
+**Heun**: `k2 = f(t+h, y+h*k1)`, `y_new = y + h*(k1+k2)/2`
+
+**Ralston**: `k2 = f(t+2h/3, y+2h*k1/3)`, `y_new = y + h*(k1/4 + 3*k2/4)`
+
+모두 2차 방법. `n=100`에서 오차 ~6.2e-6.
+
+### 18.4 RK4
+
+```
+k1 = f(t, y)
+k2 = f(t + h/2, y + h*k1/2)
+k3 = f(t + h/2, y + h*k2/2)
+k4 = f(t + h,   y + h*k3)
+y_new = y + h*(k1 + 2*k2 + 2*k3 + k4)/6
+```
+
+4차 방법. `n=100`에서 오차 ~3.1e-11. 고정 step에서 최적 정밀도/성능 균형.
+
+단일 step은 `_rk4_step()` inline cdef 함수로 최적화:
+
+```cython
+cdef inline double _rk4_step(object f, double t, double y, double h) noexcept
+```
+
+### 18.5 Dormand-Prince RK45 (DOPRI5)
+
+7-stage FSAL (First Same As Last): 6번의 새 함수 평가 + 이전 step의 k7 재사용.
+
+오차 추정: `err = h * sum((b_i - b*_i) * k_i)` (5차 - 4차)
+
+step 크기 조정:
+```
+h_new = h * 0.9 * (tol / err)^0.2
+h_new = clamp(h_new, 0.1*h, 5*h)
+```
+
+마지막 step은 `t + h > t_end`이면 `h = t_end - t`로 자동 축소.
+
+```python
+# tol=1e-8: dy/dt=-y 에서 13 step으로 수렴
+y = na.rk45(lambda t, y: -y, 0.0, 1.0, 1.0, tol=1e-8)
+```
+
+### 18.6 Fehlberg RKF45
+
+6-stage. DOPRI5와 동일한 적응형 구조이나 Fehlberg(1969) 원래 계수 사용.
+FSAL 없음: step마다 6회 함수 평가.
+
+```python
+y = na.rk_fehlberg(lambda t, y: -y, 0.0, 1.0, 1.0, tol=1e-10)
+```
+
+### 18.7 PyExpr 2변수 입력
+
+ODE `f(t, y)`가 PyExpr인 경우 `_resolve_callable_2var()` 헬퍼가 처리합니다:
+
+```cython
+cdef object _resolve_callable_2var(object f, str var1, str var2):
+    if hasattr(f, 'evalf'):
+        return lambda v1, v2: f.evalf(**{var1: v1, var2: v2})
+    if callable(f):
+        return f
+    raise TypeError(...)
+```
+
+사용 예:
+```python
+from math_library.laplace import t, symbol
+y_sym = symbol('y')
+# dy/dt = -2*t*y → y = exp(-t^2)
+y = na.rk4(-2*t*y_sym, 0.0, 1.0, 1.0, n=200, vars=('t', 'y'))
+```
+
+### 18.8 return_trajectory
+
+`return_trajectory=True`이면 모든 고정 step 메서드(euler, rk2, rk4)는
+`[(t_0, y_0), ..., (t_n, y_n)]` 리스트를 반환합니다 (n+1개 점).
+
+적응형 메서드(rk45, rk_fehlberg)는 수락된 step마다 점을 추가합니다.
+
+```python
+traj = na.rk4(lambda t, y: -y, 0.0, 1.0, 1.0, n=10, return_trajectory=True)
+# len(traj) == 11,  traj[0] == (0.0, 1.0),  traj[-1] == (1.0, y_end)
+```
+
+---
+
+## 19. Differentiation 재활용 설계 원리
+
+`newton_raphson`의 `fprime=None` 기본값은 기존 `Differentiation` 클래스를 재활용합니다.
+
+`NumericalAnalysis.__init__`에서 `Differentiation` 인스턴스를 생성하고 `self._differ`에 보관:
+
+```python
+def __init__(self):
+    from math_library import Differentiation
+    self._differ = Differentiation()
+```
+
+Newton 내부에서:
+```python
+_fp = lambda x: self._differ.single_variable(_f, x)
+```
+
+`Differentiation.single_variable`은 Ridders-Richardson extrapolation을 사용하므로
+`fprime=None`이어도 고정밀 수치 미분을 제공합니다.
+
+**설계 원칙**: 기존 인프라를 재활용하여 코드 중복을 방지하고, 사용자가 명시적 도함수를 알고 있으면 빠른 경로(`fprime` 인수)를 제공합니다.

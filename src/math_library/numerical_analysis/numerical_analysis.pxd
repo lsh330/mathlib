@@ -2,4 +2,4 @@
 # cython: language_level=3
 
 cdef class NumericalAnalysis:
-    pass
+    cdef object _differ
