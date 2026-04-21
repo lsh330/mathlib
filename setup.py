@@ -4,6 +4,7 @@ MinGW-w64 UCRT64 (gcc 15.2.0) 및 MSVC 자동 감지
 """
 import sys
 import os
+import numpy as np
 from setuptools import setup, Extension
 from Cython.Build import cythonize
 
@@ -203,6 +204,12 @@ extensions = [
         "math_library.numerical_analysis.numerical_analysis",
         ["src/math_library/numerical_analysis/numerical_analysis.pyx"],
     ),
+    # Tier 7: LinearAlgebra (행렬 분해 9종)
+    make_ext(
+        "math_library.linear_algebra.linear_algebra",
+        ["src/math_library/linear_algebra/linear_algebra.pyx"],
+        include_dirs=[np.get_include()],
+    ),
 ]
 
 # ------------------------------------------------------------------ Laplace Extension (C++17, Phase A)
@@ -309,5 +316,6 @@ setup(
         "math_library.differentiation",
         "math_library.laplace",
         "math_library.numerical_analysis",
+        "math_library.linear_algebra",
     ],
 )

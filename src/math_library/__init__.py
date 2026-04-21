@@ -138,6 +138,9 @@ from .differentiation import Differentiation
 # ------------------------------------------------------------------ 수치해석
 from .numerical_analysis import NumericalAnalysis
 
+# ------------------------------------------------------------------ 선형대수
+from .linear_algebra import LinearAlgebra
+
 __all__ = [
     # 상수
     "pi", "e", "epsilon",
@@ -177,4 +180,6 @@ __all__ = [
     "Differentiation",
     # 수치해석
     "NumericalAnalysis",
+    # 선형대수
+    "LinearAlgebra",
 ]

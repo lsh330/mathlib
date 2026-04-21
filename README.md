@@ -19,14 +19,16 @@ Python `math` 모듈의 대체를 목표로 설계한 **Cython 기반 자체 구
 5. [math 모듈 마이그레이션 가이드](#5-math-모듈-마이그레이션-가이드)
 6. [Laplace 변환](#6-laplace-변환)
 7. [수치해석 (NumericalAnalysis)](#7-수치해석-numericalanalysis)
-8. [성능 벤치마크](#8-성능-벤치마크-기본-함수)
-9. [정확도 보장](#9-정확도-보장)
-10. [구현 철학](#10-구현-철학)
-11. [프로젝트 구조](#11-프로젝트-구조)
-12. [개발 및 테스트](#12-개발-및-테스트)
-13. [현재 한계 및 TODO](#13-현재-한계-및-todo)
-14. [라이선스](#14-라이선스)
-15. [참고문헌](#15-참고문헌)
+8. [선형대수 (LinearAlgebra)](#8-선형대수-linearalgebra)
+9. [성능 벤치마크](#9-성능-벤치마크-기본-함수)
+9. [성능 벤치마크](#9-성능-벤치마크-기본-함수)
+10. [정확도 보장](#10-정확도-보장)
+11. [구현 철학](#11-구현-철학)
+12. [프로젝트 구조](#12-프로젝트-구조)
+13. [개발 및 테스트](#13-개발-및-테스트)
+14. [현재 한계 및 TODO](#14-현재-한계-및-todo)
+15. [라이선스](#15-라이선스)
+16. [참고문헌](#16-참고문헌)
 
 ---
 
@@ -1057,7 +1059,75 @@ y_end = na.predictor_corrector(f, t0, y0, t_end, n=1000, order=4)  # PECE
 
 ---
 
-## 8. 성능 벤치마크 (기본 함수)
+## 8. 선형대수 (LinearAlgebra)
+
+`math_library.LinearAlgebra` 클래스는 `np.linalg.*` 없이 Cython 자체 구현된 행렬 분해 알고리즘 9종을 제공합니다.
+
+### 8.1 메서드 목록
+
+| 메서드 | 알고리즘 | 반환 | 비고 |
+|---|---|---|---|
+| `lu(A, *, pivot=True)` | Doolittle + partial pivoting | `(P, L, U)` | PA = LU |
+| `ldu(A)` | LU 유도 | `(L, D, U)` | D: 1D 배열 |
+| `qr(A, *, mode='reduced')` | Householder reflections | `(Q, R)` | reduced/complete 모드 |
+| `cholesky(A, *, lower=True)` | Banachiewicz | `L` or `U` | SPD 행렬 전용 |
+| `svd(A, *, full_matrices=False)` | Golub-Reinsch (bidiag + QR shift) | `(U, S, Vt)` | thin/full 모드 |
+| `gaussian_elimination(A, b, *, form)` | Gauss-Jordan + partial pivoting | RREF 또는 해 `x` | form='rref'/'ref' |
+| `det(A)` | LU 기반 | `float` | sign(P) · prod(diag(U)) |
+| `rank(A, *, tol=None)` | SVD 기반 | `int` | tol 기본: max(m,n)·ε·σ_max |
+| `inverse(A)` | LU 기반 열별 대입 | ndarray | AX=I n 개 선형계 |
+
+### 8.2 사용 예시
+
+```python
+import numpy as np
+from math_library import LinearAlgebra
+
+la = LinearAlgebra()
+rng = np.random.default_rng(42)
+A = rng.standard_normal((5, 5))
+
+# LU 분해
+P, L, U = la.lu(A)          # PA = LU
+# QR 분해
+Q, R = la.qr(A)             # A = QR
+# SVD
+U_s, S, Vt = la.svd(A)     # A = U diag(S) Vt
+# Cholesky (SPD 행렬)
+M = A @ A.T + 5*np.eye(5)
+L = la.cholesky(M)          # M = L L^T
+# 선형계 풀기
+b = rng.standard_normal(5)
+x = la.gaussian_elimination(A, b)   # Ax = b
+# 행렬식
+d = la.det(A)
+# 역행렬
+A_inv = la.inverse(A)
+# 랭크
+r = la.rank(A)
+```
+
+### 8.3 정확도 (재구성 상대오차 기준)
+
+| 알고리즘 | n=5 | n=50 | n=200 |
+|---|---|---|---|
+| LU (PA = LU) | ~1e-16 | ~4e-16 | ~1e-15 |
+| QR (A = QR) | ~3e-16 | ~8e-16 | ~1e-15 |
+| Cholesky (A = LL^T) | ~1e-16 | ~3e-16 | ~4e-16 |
+| SVD (A = UΣVt) | ~1e-15 | ~4e-15 | ~6e-15 |
+| inverse (AA^{-1} = I) | ~6e-17 | ~4e-16 | ~6e-16 |
+
+### 8.4 성능 (Windows 11, g++ 15.2.0 O3, Intel i7)
+
+| 알고리즘 | n=100 | n=500 | n=1000 |
+|---|---|---|---|
+| LU | 0.1 ms | 6 ms | 63 ms |
+| Cholesky | 0.5 ms | 6 ms | 59 ms |
+| SVD | 0.5 ms (50×50) | 16 ms (200×200) | — |
+
+---
+
+## 9. 성능 벤치마크 (기본 함수)
 
 ### 측정 환경
 
