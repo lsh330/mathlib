@@ -27,6 +27,10 @@ cdef extern from "cpp/capi.hpp" namespace "ml_laplace":
     size_t pool_make_func(uint8_t, size_t) except +
     size_t pool_make_neg(size_t) except +
 
+    # Phase E: Heaviside / Dirac
+    size_t pool_make_heaviside(size_t) except +
+    size_t pool_make_dirac(size_t) except +
+
     size_t pool_add(size_t, size_t) except +
     size_t pool_sub(size_t, size_t) except +
     size_t pool_mul(size_t, size_t) except +
@@ -415,6 +419,28 @@ cdef class PyExpr:
             var_h = (<PyExpr>var)._handle
         return PyExpr._wrap(laplace_cancel(self._handle, var_h))
 
+    # ------------------------------------------------------------------ Phase E: collect
+    def collect(PyExpr self, var=None):
+        """
+        var 에 대한 다항식 차수별 계수 합산.
+        3*s^2 + 2*s^2 + 5*s + 7  →  5*s^2 + 5*s + 7
+
+        Parameters
+        ----------
+        var : PyExpr, optional
+            기준 변수. None 이면 식에서 자동 탐지.
+
+        Returns
+        -------
+        PyExpr
+        """
+        cdef extern from "cpp/capi.hpp" namespace "ml_laplace":
+            size_t laplace_collect(size_t, size_t) except +
+        cdef size_t var_h = 0
+        if var is not None:
+            var_h = (<PyExpr>var)._handle
+        return PyExpr._wrap(laplace_collect(self._handle, var_h))
+
     # ------------------------------------------------------------------ Phase D: simplify (expand + cancel)
     def simplify(PyExpr self, var=None):
         """
@@ -438,8 +464,10 @@ cdef class PyExpr:
 
     def feedback(PyExpr self, H=None):
         """
-        피드백 연결: self / (1 + self * H).
+        피드백 연결: self / (1 + self * H), 자동 simplify 적용.
         H=None 이면 단위 피드백 (H=1).
+
+        G = 1/(s+1) → G.feedback() = 1/(s+2)
 
         Parameters
         ----------
@@ -454,7 +482,12 @@ cdef class PyExpr:
             H = _const(1.0)
         cdef PyExpr one_ = <PyExpr>(_const(1.0))
         cdef PyExpr H_ = <PyExpr>H
-        return self / (one_ + self * H_)
+        raw = self / (one_ + self * H_)
+        # 자동 단순화: expand → cancel
+        try:
+            return raw.simplify()
+        except Exception:
+            return raw
 
     # ------------------------------------------------------------------ Phase D: Frequency response
     def frequency_response(PyExpr self, omega):
@@ -622,6 +655,23 @@ def Sqrt(PyExpr arg):
     """sqrt(arg) — 심볼릭 제곱근"""
     return PyExpr._wrap(pool_make_func(FUNCID_SQRT, arg._handle))
 
+def Heaviside(PyExpr arg):
+    """heaviside(arg) — Heaviside 계단 함수 u(arg).
+    Laplace 변환: L{u(t-a)} = e^{-as}/s
+    수치 평가: arg<0 → 0.0, arg=0 → 0.5, arg>0 → 1.0
+    """
+    return PyExpr._wrap(pool_make_heaviside(arg._handle))
+
+def Dirac(PyExpr arg):
+    """dirac(arg) — Dirac delta 함수 δ(arg).
+    Laplace 변환: L{δ(t-a)} = e^{-as}
+    수치 평가는 0.0 반환 (분포이므로 pointwise 평가 미지원).
+    """
+    return PyExpr._wrap(pool_make_dirac(arg._handle))
+
+# alias
+H = Heaviside
+
 
 # ================================================================== Pool 통계
 
@@ -655,5 +705,6 @@ __all__ = [
     'Arcsin', 'Arccos', 'Arctan',
     'Sinh', 'Cosh', 'Tanh',
     'Exp', 'Ln', 'Log', 'Sqrt',
+    'Heaviside', 'Dirac', 'H',
     'ExprPoolStats',
 ]

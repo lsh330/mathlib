@@ -10,6 +10,7 @@ try:
         Arcsin, Arccos, Arctan,
         Sinh, Cosh, Tanh,
         Exp, Ln, Log, Sqrt,
+        Heaviside, Dirac, H,
         ExprPoolStats,
     )
 
@@ -49,6 +50,7 @@ __all__ = [
     'Arcsin', 'Arccos', 'Arctan',
     'Sinh', 'Cosh', 'Tanh',
     'Exp', 'Ln', 'Log', 'Sqrt',
+    'Heaviside', 'Dirac', 'H',
     'ExprPoolStats', 'ExprPool',
     'Laplace',
     'lambdify',

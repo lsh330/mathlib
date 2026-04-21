@@ -473,6 +473,180 @@ ExprPtr try_transform_primitive(ExprPtr expr, ExprPtr t_var, ExprPtr s_var) {
     return nullptr;  // 매칭 실패
 }
 
+// ================================================================== is_heaviside_shift
+// Heaviside(t - a) 패턴 탐지 → a 반환 (a=0 포함)
+// arg 형태:
+//   t_var          → a = 0
+//   Sum([t_var, -a]) or Sum([-a, t_var]) → a
+//   Neg(Sum(...))  → 불일치
+// 반환: true + shift 값
+
+static bool is_heaviside_shift(ExprPtr expr, ExprPtr t_var, double& shift) noexcept {
+    if (expr->type() != NodeType::FUNC) return false;
+    const Func* f = static_cast<const Func*>(expr);
+    if (f->id() != FuncId::HEAVISIDE) return false;
+
+    ExprPtr arg = f->arg();
+    // 단순 t_var
+    if (arg == t_var) {
+        shift = 0.0;
+        return true;
+    }
+    // Sum([t_var, -a]) 또는 Sum([-a, t_var]) → a
+    if (arg->type() == NodeType::SUM) {
+        const Sum* s = static_cast<const Sum*>(arg);
+        const auto& ops = s->operands();
+        if (ops.size() != 2) return false;
+        // 하나는 t_var, 하나는 수치 (음수가 offset)
+        for (int which = 0; which < 2; ++which) {
+            ExprPtr candidate_t   = ops[which];
+            ExprPtr candidate_off = ops[1 - which];
+            if (candidate_t != t_var) continue;
+            double v = 0.0;
+            if (get_numeric(candidate_off, v)) {
+                shift = -v;  // Sum(t, -a) → arg=t-a → shift = a
+                return true;
+            }
+            // Neg(a) 형태
+            if (candidate_off->type() == NodeType::NEG) {
+                ExprPtr inner = static_cast<const Neg*>(candidate_off)->operand();
+                if (get_numeric(inner, v)) {
+                    shift = v;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// ================================================================== is_dirac_shift
+// Dirac(t - a) 패턴 탐지 → a 반환 (a=0 포함)
+
+static bool is_dirac_shift(ExprPtr expr, ExprPtr t_var, double& shift) noexcept {
+    if (expr->type() != NodeType::FUNC) return false;
+    const Func* f = static_cast<const Func*>(expr);
+    if (f->id() != FuncId::DIRAC) return false;
+
+    ExprPtr arg = f->arg();
+    if (arg == t_var) {
+        shift = 0.0;
+        return true;
+    }
+    if (arg->type() == NodeType::SUM) {
+        const Sum* s = static_cast<const Sum*>(arg);
+        const auto& ops = s->operands();
+        if (ops.size() != 2) return false;
+        for (int which = 0; which < 2; ++which) {
+            ExprPtr candidate_t   = ops[which];
+            ExprPtr candidate_off = ops[1 - which];
+            if (candidate_t != t_var) continue;
+            double v = 0.0;
+            if (get_numeric(candidate_off, v)) {
+                shift = -v;
+                return true;
+            }
+            if (candidate_off->type() == NodeType::NEG) {
+                ExprPtr inner = static_cast<const Neg*>(candidate_off)->operand();
+                if (get_numeric(inner, v)) {
+                    shift = v;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// ================================================================== make_exp_neg_as
+// e^(-a*s) AST 생성 헬퍼 (a >= 0)
+
+static ExprPtr make_exp_neg_as(double a, ExprPtr s_var) {
+    if (a == 0.0) return P().one();
+    ExprPtr neg_a = P().make_const(-a);
+    ExprPtr neg_as = P().mul(neg_a, s_var);
+    return P().make_func(FuncId::EXP, neg_as);
+}
+
+// ================================================================== try_heaviside_dirac_transform
+// Heaviside(t-a), Dirac(t-a) 단독 변환
+// L{u(t-a)} = e^(-as)/s  (a >= 0)
+// L{δ(t-a)} = e^(-as)    (a >= 0)
+
+static ExprPtr try_heaviside_dirac_transform(ExprPtr expr, ExprPtr t_var, ExprPtr s_var) {
+    double shift = 0.0;
+    // Heaviside
+    if (is_heaviside_shift(expr, t_var, shift)) {
+        if (shift < 0.0) return nullptr;  // a < 0 미지원
+        ExprPtr exp_as = make_exp_neg_as(shift, s_var);
+        ExprPtr s_inv  = P().make_pow(s_var, cR(-1));
+        return P().mul(exp_as, s_inv);
+    }
+    // Dirac
+    if (is_dirac_shift(expr, t_var, shift)) {
+        if (shift < 0.0) return nullptr;
+        return make_exp_neg_as(shift, s_var);
+    }
+    return nullptr;
+}
+
+// ================================================================== try_t_shift
+// u(t-a) * f(t-a) 패턴 → e^(-as) * L{f(t)}
+// 조건: Mul의 인수 중 Heaviside(t-a) 가 있고, 나머지 f(t-a)가 t-shift 형태인 경우
+
+static ExprPtr try_t_shift(ExprPtr expr, ExprPtr t_var, ExprPtr s_var) {
+    if (expr->type() != NodeType::MUL) return nullptr;
+    const Mul* m = static_cast<const Mul*>(expr);
+    const auto& ops = m->operands();
+
+    // Heaviside(t-a) 인수 탐색
+    int hside_idx = -1;
+    double shift = 0.0;
+    ExprPtr hside_arg = nullptr;  // Heaviside의 실제 argument (t-a) 포인터 보존
+    for (int i = 0; i < (int)ops.size(); ++i) {
+        double sh = 0.0;
+        if (is_heaviside_shift(ops[i], t_var, sh) && sh >= 0.0) {
+            hside_idx = i;
+            shift = sh;
+            // Heaviside 의 arg 포인터를 그대로 사용 (Pool 경계 문제 회피)
+            hside_arg = static_cast<const Func*>(ops[i])->arg();
+            break;
+        }
+    }
+    if (hside_idx < 0) return nullptr;
+
+    // 나머지 인수들로 f(t-a) 구성
+    std::vector<ExprPtr> rest_ops;
+    rest_ops.reserve(ops.size() - 1);
+    for (int i = 0; i < (int)ops.size(); ++i) {
+        if (i != hside_idx) rest_ops.push_back(ops[i]);
+    }
+
+    ExprPtr ft_minus_a;
+    if (rest_ops.empty()) {
+        // u(t-a) 단독: primitive에서 처리 (이 경로는 사실상 진입 안 함)
+        return nullptr;
+    } else if (rest_ops.size() == 1) {
+        ft_minus_a = rest_ops[0];
+    } else {
+        ft_minus_a = P().make_mul(std::vector<ExprPtr>(rest_ops));
+    }
+
+    // t-a → t 치환: hside_arg 는 Heaviside 인수 (t-a) 의 실제 포인터
+    // ft_minus_a 와 같은 Pool(A)에서 생성된 포인터이므로 포인터 비교가 정확히 일치함
+    // substitute_var(f(t-a), (t-a), t) 로 f(t) 복원
+    ExprPtr key = (shift == 0.0) ? t_var : hside_arg;
+    ExprPtr f_of_t = substitute_var(ft_minus_a, key, t_var);
+
+    // L{f(t)} 계산
+    ExprPtr F_s = _transform_impl(f_of_t, t_var, s_var);
+    if (!F_s) return nullptr;
+
+    // e^(-as) * F(s)
+    ExprPtr exp_as = make_exp_neg_as(shift, s_var);
+    return P().mul(exp_as, F_s);
+}
+
 // ================================================================== try_linearity
 // Sum의 각 항을 재귀 변환
 
@@ -618,8 +792,15 @@ static ExprPtr _transform_impl(ExprPtr expr, ExprPtr t_var, ExprPtr s_var) {
         }
     }
 
-    // 5) Func(EXP/SIN/COS/SINH/COSH, linear_in_t) → primitive
+    // 5) Func: primitive (EXP/SIN/COS/SINH/COSH) 또는 Heaviside/Dirac
     if (expr->type() == NodeType::FUNC) {
+        // Heaviside/Dirac 우선
+        result = try_heaviside_dirac_transform(expr, t_var, s_var);
+        if (result) {
+            _transform_cache[expr] = result;
+            return result;
+        }
+        // 기존 primitive
         result = try_transform_primitive(expr, t_var, s_var);
         if (result) {
             _transform_cache[expr] = result;
@@ -673,7 +854,14 @@ static ExprPtr _transform_impl(ExprPtr expr, ExprPtr t_var, ExprPtr s_var) {
             }
         }
 
-        // 8) Mul (exp(a*t) * f(t)) → s-shift
+        // 8a) Mul: u(t-a) * f(t-a) → t-shift (e^(-as) * F(s))
+        result = try_t_shift(expr, t_var, s_var);
+        if (result) {
+            _transform_cache[expr] = result;
+            return result;
+        }
+
+        // 8b) Mul (exp(a*t) * f(t)) → s-shift
         result = try_s_shift(expr, t_var, s_var);
         if (result) {
             _transform_cache[expr] = result;

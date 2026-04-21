@@ -109,6 +109,17 @@ def _convert(s_repr: str, var_names: List[str], backend: str) -> str:
             inner = s[len(fname)+1:-1]
             return f"{pyname}({_convert(inner, var_names, backend)})"
 
+    # Heaviside: heaviside(arg) — Python inline lambda
+    if s.startswith('heaviside(') and s.endswith(')'):
+        inner = s[len('heaviside('):-1]
+        inner_py = _convert(inner, var_names, backend)
+        # u(x): x<0→0, x=0→0.5, x>0→1
+        return f'(0.0 if ({inner_py}) < 0 else (0.5 if ({inner_py}) == 0 else 1.0))'
+
+    # Dirac: dirac(arg) — 수치 평가 불가, 0 반환
+    if s.startswith('dirac(') and s.endswith(')'):
+        return '0.0'
+
     # ── 괄호로 감싸인 표현식
     if s.startswith('(') and s.endswith(')'):
         # 매칭 괄호 확인 (전체가 하나의 괄호 쌍인지)

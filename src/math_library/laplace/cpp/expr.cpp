@@ -288,20 +288,22 @@ ExprPtr Pow::substitute(const SubstMap& subs) const {
 
 static const char* func_name(FuncId id) noexcept {
     switch (id) {
-        case FuncId::SIN:    return "sin";
-        case FuncId::COS:    return "cos";
-        case FuncId::TAN:    return "tan";
-        case FuncId::ARCSIN: return "arcsin";
-        case FuncId::ARCCOS: return "arccos";
-        case FuncId::ARCTAN: return "arctan";
-        case FuncId::SINH:   return "sinh";
-        case FuncId::COSH:   return "cosh";
-        case FuncId::TANH:   return "tanh";
-        case FuncId::EXP:    return "exp";
-        case FuncId::LN:     return "ln";
-        case FuncId::LOG:    return "log";
-        case FuncId::SQRT:   return "sqrt";
-        default:             return "func";
+        case FuncId::SIN:       return "sin";
+        case FuncId::COS:       return "cos";
+        case FuncId::TAN:       return "tan";
+        case FuncId::ARCSIN:    return "arcsin";
+        case FuncId::ARCCOS:    return "arccos";
+        case FuncId::ARCTAN:    return "arctan";
+        case FuncId::SINH:      return "sinh";
+        case FuncId::COSH:      return "cosh";
+        case FuncId::TANH:      return "tanh";
+        case FuncId::EXP:       return "exp";
+        case FuncId::LN:        return "ln";
+        case FuncId::LOG:       return "log";
+        case FuncId::SQRT:      return "sqrt";
+        case FuncId::HEAVISIDE: return "heaviside";
+        case FuncId::DIRAC:     return "dirac";
+        default:                return "func";
     }
 }
 
@@ -339,6 +341,14 @@ double Func::evalf(const SubstMap& subs) const {
         case FuncId::LN:     return std::log(v);
         case FuncId::LOG:    return std::log10(v);
         case FuncId::SQRT:   return std::sqrt(v);
+        // Heaviside: u(arg) — t<0 → 0, t=0 → 0.5 (관례), t>0 → 1
+        case FuncId::HEAVISIDE:
+            if (v < 0.0)  return 0.0;
+            if (v == 0.0) return 0.5;
+            return 1.0;
+        // Dirac delta: 분포이므로 수치 평가는 0 반환 (Laplace 변환 경로에서만 의미 있음)
+        case FuncId::DIRAC:
+            return 0.0;
         default:
             throw std::runtime_error("Func::evalf: unknown FuncId");
     }

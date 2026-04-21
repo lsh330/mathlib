@@ -25,19 +25,21 @@ enum class NodeType : uint8_t {
 };
 
 enum class FuncId : uint8_t {
-    SIN    = 0,
-    COS    = 1,
-    TAN    = 2,
-    ARCSIN = 3,
-    ARCCOS = 4,
-    ARCTAN = 5,
-    SINH   = 6,
-    COSH   = 7,
-    TANH   = 8,
-    EXP    = 9,
-    LN     = 10,
-    LOG    = 11,
-    SQRT   = 12,
+    SIN      = 0,
+    COS      = 1,
+    TAN      = 2,
+    ARCSIN   = 3,
+    ARCCOS   = 4,
+    ARCTAN   = 5,
+    SINH     = 6,
+    COSH     = 7,
+    TANH     = 8,
+    EXP      = 9,
+    LN       = 10,
+    LOG      = 11,
+    SQRT     = 12,
+    HEAVISIDE = 13,  // u(t-a): Heaviside 계단 함수
+    DIRAC    = 14,   // δ(t-a): Dirac delta (분포, 수치 평가는 0.0)
 };
 
 // ------------------------------------------------------------------ 기본 클래스

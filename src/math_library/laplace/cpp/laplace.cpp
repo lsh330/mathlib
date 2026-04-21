@@ -184,8 +184,10 @@ std::string to_latex(ExprPtr expr) {
         case FuncId::EXP:    return "e^{" + arg_s + "}";
         case FuncId::LN:     return "\\ln\\left(" + arg_s + "\\right)";
         case FuncId::LOG:    return "\\log\\left(" + arg_s + "\\right)";
-        case FuncId::SQRT:   return "\\sqrt{" + arg_s + "}";
-        default:             return "\\mathrm{func}\\left(" + arg_s + "\\right)";
+        case FuncId::SQRT:      return "\\sqrt{" + arg_s + "}";
+        case FuncId::HEAVISIDE: return "u\\left(" + arg_s + "\\right)";
+        case FuncId::DIRAC:     return "\\delta\\left(" + arg_s + "\\right)";
+        default:                return "\\mathrm{func}\\left(" + arg_s + "\\right)";
         }
     }
 

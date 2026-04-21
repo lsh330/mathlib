@@ -174,6 +174,21 @@ inline size_t laplace_cancel(size_t expr_h, size_t var_h) {
     return expr_to_handle(cancel(expr_from_handle(expr_h), var));
 }
 
+inline size_t laplace_collect(size_t expr_h, size_t var_h) {
+    ExprPtr var = (var_h != 0) ? expr_from_handle(var_h) : nullptr;
+    return expr_to_handle(collect(expr_from_handle(expr_h), var));
+}
+
+// Heaviside / Dirac 팩토리 (FuncId 값 직접 사용)
+inline size_t pool_make_heaviside(size_t arg_h) {
+    return expr_to_handle(ExprPool::instance().make_func(
+        FuncId::HEAVISIDE, expr_from_handle(arg_h)));
+}
+inline size_t pool_make_dirac(size_t arg_h) {
+    return expr_to_handle(ExprPool::instance().make_func(
+        FuncId::DIRAC, expr_from_handle(arg_h)));
+}
+
 // ------------------------------------------------------------------ Phase C: 역 Laplace 변환
 inline size_t laplace_inverse_transform(size_t F_h, size_t s_h, size_t t_h) {
     return expr_to_handle(inverse_transform(

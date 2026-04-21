@@ -588,20 +588,52 @@ print(F.magnitude(1.0))  # 0.447213595499958
 
 변환 가능한 t-영역 표현식에 사용 가능한 함수:
 
-| 심볼 함수 | 의미 |
-|---|---|
-| `Sin(expr)` | sin |
-| `Cos(expr)` | cos |
-| `Tan(expr)` | tan |
-| `Exp(expr)` | exp (지수) |
-| `Sinh(expr)` | sinh (쌍곡사인) |
-| `Cosh(expr)` | cosh (쌍곡코사인) |
-| `Tanh(expr)` | tanh (쌍곡탄젠트) |
-| `Ln(expr)` | 자연로그 (변환 한정 사용) |
-| `Sqrt(expr)` | 제곱근 |
-| `Arcsin`, `Arccos`, `Arctan` | 역삼각함수 |
+| 심볼 함수 | 의미 | Laplace 변환 |
+|---|---|---|
+| `Sin(expr)` | sin | `ω/(s²+ω²)` |
+| `Cos(expr)` | cos | `s/(s²+ω²)` |
+| `Tan(expr)` | tan | — |
+| `Exp(expr)` | exp (지수) | `1/(s-a)` |
+| `Sinh(expr)` | sinh (쌍곡사인) | `a/(s²-a²)` |
+| `Cosh(expr)` | cosh (쌍곡코사인) | `s/(s²-a²)` |
+| `Tanh(expr)` | tanh (쌍곡탄젠트) | — |
+| `Ln(expr)` | 자연로그 (변환 한정 사용) | — |
+| `Sqrt(expr)` | 제곱근 | — |
+| `Arcsin`, `Arccos`, `Arctan` | 역삼각함수 | — |
+| `Heaviside(expr)` / `H(expr)` | 헤비사이드 계단 함수 u(t-a) | `e^{-as}/s` |
+| `Dirac(expr)` | 디락 델타 δ(t-a) | `e^{-as}` |
 
-산술 연산자 `+`, `-`, `*`, `/`, `**` 및 상수·심볼 조합 모두 지원합니다.
+- **t-shift 규칙**: `u(t-a)*f(t-a)` 형태는 자동으로 `e^{-as}·L{f(t)}` 로 변환됩니다.
+- **Non-rational inverse**: `L⁻¹{e^{-as}·G(s)}` = `u(t-a)·g(t-a)` 를 자동 처리합니다.
+- 산술 연산자 `+`, `-`, `*`, `/`, `**` 및 상수·심볼 조합 모두 지원합니다.
+
+```python
+from math_library.laplace import Laplace, t, s, Exp, Heaviside, Dirac, const
+
+L = Laplace()
+
+# Heaviside 변환
+F = L.transform(Heaviside(t - const(2)))   # e^{-2s} / s
+print(F.evalf(s=1.0))   # 0.135335...
+
+# Dirac delta 변환
+G = L.transform(Dirac(t - const(1)))       # e^{-s}
+print(G.evalf(s=1.0))   # 0.367879...
+
+# t-shift: u(t-1)*e^{-(t-1)}  →  e^{-s}/(s+1)
+a = const(1)
+H_shift = Heaviside(t - a) * Exp(-(t - a))
+F_shift = L.transform(H_shift)
+print(F_shift.evalf(s=2.0))   # 0.045111...
+
+# non-rational inverse: e^{-2s}/(s+1)  →  u(t-2)*e^{-(t-2)}
+G_inv = L.transform(Exp(-t))    # 1/(s+1)
+s_sym = symbol('s')
+from math_library.laplace import symbol
+F_nr = Exp(-2 * symbol('s')) * G_inv
+f_back = L.inverse(F_nr)
+print(f_back.evalf(t=2.5))   # 0.606530...  (= e^{-0.5})
+```
 
 ### 6.4 주요 메서드 요약
 
@@ -610,7 +642,7 @@ print(F.magnitude(1.0))  # 0.447213595499958
 | 메서드 | 설명 |
 |---|---|
 | `transform(f)` | F(s) = L{f(t)} |
-| `inverse(F)` | f(t) = L⁻¹{F(s)} (유리함수 한정) |
+| `inverse(F)` | f(t) = L⁻¹{F(s)}. 유리함수 및 `e^{-as}·G(s)` 형태 지원 |
 | `poles(F)` | 분모 근 (복소수 리스트) |
 | `zeros(F)` | 분자 근 (복소수 리스트) |
 | `final_value(F)` | lim_{s→0} s·F(s), (값, 유효여부) 반환 |
@@ -629,10 +661,11 @@ print(F.magnitude(1.0))  # 0.447213595499958
 | `expand()` | 분배 전개 |
 | `cancel(var)` | 유리식 약분 |
 | `simplify(var)` | expand + cancel |
+| `collect(var)` | 동류항 정리: `3s²+2s²+5s+7 → 5s²+5s+7` |
 | `partial_fractions(var)` | 부분분수 분해 |
 | `series_connect(G)` | 직렬 연결: self * G |
 | `parallel_connect(G)` | 병렬 연결: self + G |
-| `feedback(H=None)` | 피드백 연결: self / (1 + self·H) |
+| `feedback(H=None)` | 피드백 연결: self / (1 + self·H), 내부 `simplify()` 자동 적용 |
 | `frequency_response(ω)` | H(jω) 계산 |
 | `magnitude(ω)` | \|H(jω)\| |
 | `phase(ω)` | ∠H(jω) [rad] |
@@ -895,12 +928,9 @@ cython -a src/math_library/_core/trigonometric.pyx
 - **lgamma 특정 구간 ULP**: x≈0, -1, -2, ... (극점 근방) 에서 최대 ~256 ULP. 특수 함수 전용 ULP 기준 별도 정의 필요.
 - **zeta(2) 오차**: 구현값 `1.6449340668481436`, 정답 `π²/6 = 1.6449340668482264` (절대오차 8.28e-14, ~370 ULP). 특수 함수 ULP 스펙 미명시로 허용 범위 내로 처리.
 
-### Laplace 모듈 한계 (Phase E 예정)
+### Laplace 모듈 한계
 
-- **Heaviside / Dirac delta 미지원**: 불연속 신호의 Laplace 변환 미구현.
-- **Non-rational inverse 미지원**: `L⁻¹{F(s)}`는 F(s)가 유리함수인 경우만 동작.
 - **Piecewise 함수 미지원**: 구간별 정의 함수의 변환 미구현.
-- **`collect` 미구현**: `PyExpr.collect(var)` 메서드 Phase E 예정.
 - **`cancel` 비전개 분자/분모**: `(1/(s+1) + 1)**-1 * (s+1)**-1` 형태의 중첩 피드백 표현을 자동 단순화하지 않음 — 수동 `simplify` 필요.
 
 ---

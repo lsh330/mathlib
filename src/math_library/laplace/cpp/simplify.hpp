@@ -21,4 +21,9 @@ ExprPtr cancel(ExprPtr e, ExprPtr var);
 // 자동 변수 탐지 버전 (VAR 노드를 DFS로 찾아 사용)
 ExprPtr cancel_auto(ExprPtr e);
 
+// var 에 대한 다항식 차수별 계수 합산 (collect)
+// 3*s^2 + 2*s^2 + 5*s + 7 → 5*s^2 + 5*s + 7
+// 비다항식이면 원식 반환
+ExprPtr collect(ExprPtr e, ExprPtr var);
+
 } // namespace ml_laplace

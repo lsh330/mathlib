@@ -29,6 +29,8 @@ Thumbs.db
 *.html
 build/
 
+# Cython이 .pyx에서 생성한 .cpp (수동 작성 cpp/ 디렉토리는 제외)
+src/math_library/laplace/*.cpp
 
 # C/C++ 런타임 DLL (시스템에서 제공)
 *.dll

@@ -216,4 +216,25 @@ ExprPtr cancel_auto(ExprPtr e) {
     return cancel(e, var);
 }
 
+// ================================================================== collect
+// expr 을 var 에 대한 다항식으로 파싱하여 차수별 계수를 정리한 canonical form 반환.
+// 예: 3*s^2 + 2*s^2 + 5*s + 7 → 5*s^2 + 5*s + 7
+// 실패 시 (비다항식) 원식 반환.
+
+ExprPtr collect(ExprPtr e, ExprPtr var) {
+    if (!var) {
+        var = find_var(e);
+        if (!var) return e;
+    }
+    try {
+        // Polynomial::from_expr 는 이미 계수 합산을 수행하므로
+        // 파싱 후 to_expr 하면 collect 완료
+        Polynomial p = Polynomial::from_expr(e, var);
+        return p.to_expr(var);
+    } catch (...) {
+        // 유리식 포함 등으로 파싱 실패 → 원식 반환
+        return e;
+    }
+}
+
 } // namespace ml_laplace

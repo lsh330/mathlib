@@ -185,7 +185,7 @@ print(f1)   # sin(t*2)
 print(f3)   # exp(-t)
 ```
 
-사용 가능한 심볼 함수: `Sin`, `Cos`, `Tan`, `Arcsin`, `Arccos`, `Arctan`, `Sinh`, `Cosh`, `Tanh`, `Exp`, `Ln`, `Log`, `Sqrt`
+사용 가능한 심볼 함수: `Sin`, `Cos`, `Tan`, `Arcsin`, `Arccos`, `Arctan`, `Sinh`, `Cosh`, `Tanh`, `Exp`, `Ln`, `Log`, `Sqrt`, `Heaviside` (alias `H`), `Dirac`
 
 ---
 
@@ -209,10 +209,9 @@ print(F.latex())  # \frac{2}{s^{2} + 4}
 ### 지원 변환 규칙 (주요 예제)
 
 ```python
-from math_library.laplace import Laplace, t, s, Sin, Cos, Exp, const, symbol
+from math_library.laplace import Laplace, t, s, Sin, Cos, Exp, Heaviside, Dirac, const, symbol
 
 L = Laplace()
-t_expr = symbol('t')
 
 # 1) 상수 k → k/s
 print(L.transform(const(3.0)))    # s**-1*3
@@ -238,6 +237,50 @@ print(L.transform(Exp(-t) * Cos(2*t)))     # ((s + 1)**2 + 4)**-1*(s + 1)
 # 7) t·f(t) → -dF/ds (주파수 미분)
 print(L.transform(t * Exp(-t)))   # (s + 1)**-2
 print(L.transform(t * Sin(t)))    # -(s*(s**2 + 1)**-2*-2)
+```
+
+### Heaviside / Dirac delta 변환
+
+```python
+from math_library.laplace import Laplace, t, Heaviside, Dirac, H, const
+
+L = Laplace()
+
+# L{u(t)} = 1/s
+F1 = L.transform(Heaviside(t))
+print(F1.evalf(s=2.0))   # 0.5
+
+# L{u(t-a)} = e^{-as}/s
+F2 = L.transform(Heaviside(t - const(2)))
+print(F2.evalf(s=1.0))   # exp(-2)/1 ≈ 0.1353
+
+# H 는 Heaviside 의 alias
+F3 = L.transform(H(t))
+print(F3.evalf(s=2.0))   # 0.5
+
+# L{δ(t)} = 1
+F4 = L.transform(Dirac(t))
+print(F4.evalf(s=3.0))   # 1.0
+
+# L{δ(t-a)} = e^{-as}
+F5 = L.transform(Dirac(t - const(1)))
+print(F5.evalf(s=2.0))   # exp(-2) ≈ 0.1353
+```
+
+### t-shift 규칙 (제2 이동 정리)
+
+`u(t-a) * f(t-a)` 형태는 자동으로 t-shift 규칙을 적용합니다.
+
+```python
+from math_library.laplace import Laplace, t, Heaviside, Exp, const
+
+L = Laplace()
+
+# u(t-1) * e^{-(t-1)}  →  e^{-s} / (s+1)
+a = const(1)
+f = Heaviside(t - a) * Exp(-(t - a))
+F = L.transform(f)
+print(F.evalf(s=2.0))   # exp(-2)/(2+1) ≈ 0.04511
 ```
 
 ### 수치 평가
@@ -266,21 +309,44 @@ print(f_back)   # sin(t*2)*exp(t*-1)
 
 ### 내부 알고리즘
 
-1. F(s)를 분자·분모 다항식으로 파싱
-2. 분모의 근(극점)을 Durand-Kerner 알고리즘으로 계산
-3. 부분분수 분해: 단순 극점 `A/(s-p)` 및 복소 켤레 쌍 처리
-4. 각 부분분수에 대해 역변환 룩업 적용: `A/(s+a)` → `A·e^(-at)`, `Bω/((s+a)²+ω²)` → `B·e^(-at)·sin(ωt)` 등
+1. F(s)에서 `e^{-as} * G(s)` 패턴(시간 지연) 감지
+   - 발견되면: `u(t-a) * g(t-a)` 형태로 재구성 후 G(s)를 재귀적으로 역변환
+2. F(s)를 분자·분모 다항식으로 파싱
+3. 분모의 근(극점)을 Durand-Kerner 알고리즘으로 계산
+4. 부분분수 분해: 단순 극점 `A/(s-p)` 및 복소 켤레 쌍 처리
+5. 각 부분분수에 대해 역변환 룩업 적용: `A/(s+a)` → `A·e^(-at)`, `Bω/((s+a)²+ω²)` → `B·e^(-at)·sin(ωt)` 등
 
-### 제한 사항
+### Non-rational inverse (시간 지연 포함)
 
-`inverse`는 F(s)가 **유리함수**(분자·분모 모두 s의 다항식)인 경우만 동작합니다.
-비유리 함수(`sqrt(s)`, `e^(-as)` 등)에 대해서는 예외를 발생시킵니다.
+`e^{-as} * G(s)` 형태의 비유리 함수도 역변환이 가능합니다.
+결과는 `u(t-a) * g(t-a)` 형태로 반환됩니다.
 
 ```python
-# 가능한 형태
-F1 = (2*s + 1) / (s**2 + 3*s + 2)
-# 불가능한 형태 (지원 안 됨)
-# F2 = Exp(-s) / (s + 1)   # 시간 지연 포함
+from math_library.laplace import Laplace, Exp, symbol, t
+
+L = Laplace()
+s_sym = symbol('s')
+
+# e^{-2s} / (s+1)  →  u(t-2) * e^{-(t-2)}
+G = L.transform(Exp(-t))           # 1/(s+1)
+F = Exp(-2 * s_sym) * G
+f_back = L.inverse(F)
+print(f_back)                      # heaviside(t + -2)*exp((t + -2)*-1)
+
+print(f_back.evalf(t=0.5))         # 0.0  (t < 2: u(0.5-2)=0)
+print(f_back.evalf(t=2.5))         # exp(-0.5) ≈ 0.6065
+print(f_back.evalf(t=3.5))         # exp(-1.5) ≈ 0.2231
+```
+
+Sum 형태의 F(s)는 각 항을 독립적으로 처리합니다:
+
+```python
+# F(s) = 1/(s+1) + e^{-s}/(s+2)
+G1 = L.transform(Exp(-t))          # 1/(s+1)
+G2 = L.transform(Exp(-2*t))        # 1/(s+2)
+F_sum = G1 + Exp(-s_sym) * G2
+f_sum = L.inverse(F_sum)
+# f(t) = e^{-t} + u(t-1)*e^{-2(t-1)}
 ```
 
 ---
@@ -427,6 +493,28 @@ print(expr.simplify(s))   # s + 2
 
 `simplify`는 내부적으로 `expand()` 후 `cancel(var)`를 적용합니다.
 
+### collect — 동류항 정리
+
+`expr.collect(var)` 는 var의 거듭제곱별로 계수를 합산합니다.
+
+```python
+from math_library.laplace import symbol
+
+s = symbol('s')
+
+expr = 3*s**2 + 2*s**2 + 5*s + 7
+c = expr.collect(s)
+print(c)   # s*5 + s**2*5 + 7  (5s² + 5s + 7)
+
+# 수치 확인
+print(c.evalf(s=1.0))   # 17.0
+print(c.evalf(s=2.0))   # 37.0
+```
+
+내부적으로 `Polynomial::from_expr` → `to_expr` 경로를 사용하므로,
+var에 대한 정수 지수 다항식이어야 합니다.
+변환 불가능한 식(예: 유리함수 분모에 s가 있는 경우)은 원래 식을 그대로 반환합니다.
+
 ### subs — 기호 치환
 
 ```python
@@ -554,8 +642,21 @@ T_fb = G.feedback()
 print(T_fb)   # ((s + 1)**-1 + 1)**-1*(s + 1)**-1
 ```
 
-`feedback(H=None)` 는 `self / (1 + self * H)` 를 반환합니다.
+`feedback(H=None)` 는 `self / (1 + self * H)` 를 반환하며, 내부적으로 `simplify()`를 자동 적용합니다.
 H=None 이면 H=1 (단위 피드백)입니다.
+
+```python
+from math_library.laplace import Laplace, t, Exp, symbol, const
+
+L = Laplace()
+G = L.transform(Exp(-t))   # 1/(s+1)
+
+# G.feedback() = (1/(s+1)) / (1 + 1/(s+1)) = 1/(s+2)
+# simplify() 자동 적용으로 분자/분모 약분 수행
+fb = G.feedback()
+print(fb.evalf(s=1.0))   # 1/3 ≈ 0.3333  (= 1/(1+2))
+print(fb.evalf(s=2.0))   # 0.25           (= 1/(2+2))
+```
 
 ### PID 제어기
 
@@ -800,14 +901,13 @@ print(F.evalf(s=-0.5))   # Re(-0.5) > Re(-1) → 유효
 
 | 항목 | 상태 | 비고 |
 |---|---|---|
-| Heaviside 함수 | 미지원 | Phase E 예정 |
-| Dirac delta | 미지원 | Phase E 예정 |
-| 시간 지연 `e^(-as) * F(s)` inverse | 미지원 | Phase E 예정 |
-| Non-rational `inverse` | 미지원 | 유리함수만 가능 |
-| Piecewise 함수 | 미지원 | Phase E 예정 |
-| `collect(var)` | 미구현 | Phase E 예정 |
+| Heaviside / H | 지원 | `Heaviside(t-a)`, `H(t-a)` |
+| Dirac delta | 지원 | `Dirac(t-a)` |
+| t-shift `u(t-a)*f(t-a)` 변환 | 지원 | 자동 패턴 인식 |
+| 시간 지연 `e^{-as}*G(s)` inverse | 지원 | `u(t-a)*g(t-a)` 반환 |
+| `collect(var)` | 지원 | 정수 지수 다항식 한정 |
+| `feedback()` 자동 simplify | 지원 | 내부 simplify 자동 적용 |
+| Piecewise 함수 | 미지원 | 구간별 정의 함수 미구현 |
 | 복소수 evalf | 미지원 | `lambdify(backend='cmath')` 사용 |
 | ROC 자동 검사 | 미구현 | 사용자가 직접 확인 필요 |
-
-Phase E에서 Heaviside·Dirac delta·시간 지연 처리가 추가될 예정입니다.
-현재 버전에서 이러한 기능이 필요하다면 SymPy를 병행 사용하십시오.
+| `cancel` 비전개 중첩식 | 부분 지원 | 복잡한 중첩 피드백은 수동 `simplify` 필요 |
