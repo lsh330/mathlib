@@ -198,6 +198,11 @@ extensions = [
         "math_library._core.predicates",
         ["src/math_library/_core/predicates.pyx"],
     ),
+    # Tier 6: NumericalAnalysis (Simpson 적분법 8종)
+    make_ext(
+        "math_library.numerical_analysis.numerical_analysis",
+        ["src/math_library/numerical_analysis/numerical_analysis.pyx"],
+    ),
 ]
 
 # ------------------------------------------------------------------ Laplace Extension (C++17, Phase A)
@@ -303,5 +308,6 @@ setup(
         "math_library.lcm",
         "math_library.differentiation",
         "math_library.laplace",
+        "math_library.numerical_analysis",
     ],
 )

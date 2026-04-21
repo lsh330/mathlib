@@ -18,14 +18,15 @@ Python `math` 모듈의 대체를 목표로 설계한 **Cython 기반 자체 구
 4. [API 레퍼런스](#4-api-레퍼런스)
 5. [math 모듈 마이그레이션 가이드](#5-math-모듈-마이그레이션-가이드)
 6. [Laplace 변환](#6-laplace-변환)
-7. [성능 벤치마크](#7-성능-벤치마크)
-8. [정확도 보장](#8-정확도-보장)
-9. [구현 철학](#9-구현-철학)
-10. [프로젝트 구조](#10-프로젝트-구조)
-11. [개발 및 테스트](#11-개발-및-테스트)
-12. [현재 한계 및 TODO](#12-현재-한계-및-todo)
-13. [라이선스](#13-라이선스)
-14. [참고문헌](#14-참고문헌)
+7. [수치해석 (NumericalAnalysis)](#7-수치해석-numericalanalysis)
+8. [성능 벤치마크](#8-성능-벤치마크-기본-함수)
+9. [정확도 보장](#9-정확도-보장)
+10. [구현 철학](#10-구현-철학)
+11. [프로젝트 구조](#11-프로젝트-구조)
+12. [개발 및 테스트](#12-개발-및-테스트)
+13. [현재 한계 및 TODO](#13-현재-한계-및-todo)
+14. [라이선스](#14-라이선스)
+15. [참고문헌](#15-참고문헌)
 
 ---
 
@@ -691,7 +692,189 @@ print(f_back.evalf(t=2.5))   # 0.606530...  (= e^{-0.5})
 
 ---
 
-## 7. 성능 벤치마크 (기본 함수)
+## 7. 수치해석 (NumericalAnalysis)
+
+`math_library.NumericalAnalysis` 클래스는 외부 의존성 없이 Cython 자체 구현된 수치 적분 알고리즘을 제공합니다.
+현재 Simpson 적분법 8종을 지원하며, 향후 수치 미분·비선형 방정식 등 다른 알고리즘이 같은 클래스에 추가될 예정입니다.
+
+### 7.1 빠른 시작
+
+```python
+import math
+from math_library import NumericalAnalysis
+
+na = NumericalAnalysis()
+
+# 기본 사용
+I = na.simpson_13(math.sin, 0, math.pi)                    # ≈ 2.094 (3점 단순)
+I = na.composite_simpson_13(math.sin, 0, math.pi, n=100)   # ≈ 2.0000000108 (합성, n=100)
+I = na.adaptive_simpson(math.sin, 0, math.pi, tol=1e-12)   # = 2.0 (적응형, 오차 < 1e-11)
+I = na.romberg(math.sin, 0, math.pi, depth=6)              # ≈ 2.0 (오차 ≈ 1e-15)
+
+# 오차 추정 함께 반환
+I, err = na.composite_simpson_13(math.sin, 0, math.pi, n=100, return_error=True)
+# (2.000000010824504, 1.08e-08)
+
+# PyExpr 기호 표현식 직접 입력
+from math_library.laplace import Sin, Cos, t
+f = Sin(2*t) * Cos(t)
+I = na.composite_simpson_13(f, 0, math.pi, n=100, var='t')  # ≈ 4/3
+```
+
+### 7.2 Simpson 적분법 8종
+
+| 메서드 | 설명 | n 조건 | 절대 오차 (sin, 0~π) |
+|---|---|---|---|
+| `simpson_13(f, a, b)` | 3점 단순 Simpson 1/3 | — | O(h^4), 실제 ≈ 0.094 |
+| `simpson_38(f, a, b)` | 4점 단순 Simpson 3/8 | — | O(h^4), 실제 ≈ 0.040 |
+| `composite_simpson_13(f, a, b, n)` | 합성 Simpson 1/3 | n 짝수, ≥ 2 | O(h^4), n=100: ≈ 1e-8 |
+| `composite_simpson_38(f, a, b, n)` | 합성 Simpson 3/8 | n 3의 배수, ≥ 3 | O(h^4), n=99: ≈ 2.5e-8 |
+| `adaptive_simpson(f, a, b, tol)` | 적응형 (명시적 스택) | — | < tol, 실제 ≈ 0 |
+| `mixed_simpson(f, a, b, n)` | 혼합 (n 임의, ≥ 2) | n ≥ 2 | O(h^4), 혼합 공식 |
+| `simpson_irregular(x, y)` | 불균등 간격 Simpson | ≥ 3점 | 점 간격 의존 |
+| `romberg(f, a, b, depth)` | Romberg (Richardson 외삽) | — | depth=6: ≈ 1e-15 |
+
+### 7.3 메서드 상세
+
+#### `simpson_13(f, a, b, *, var='t', return_error=False)`
+
+3점 공식: `I = (h/3) * [f(a) + 4*f(m) + f(b)]`, `h = (b-a)/2`
+
+#### `simpson_38(f, a, b, *, var='t', return_error=False)`
+
+4점 공식: `I = (3h/8) * [f(a) + 3*f(x1) + 3*f(x2) + f(b)]`, `h = (b-a)/3`
+
+#### `composite_simpson_13(f, a, b, n, *, var='t', return_error=False)`
+
+```python
+# n=100 (짝수 필수)
+I, err = na.composite_simpson_13(math.sin, 0, math.pi, n=100, return_error=True)
+
+# n 홀수이면 ValueError 발생
+try:
+    na.composite_simpson_13(math.sin, 0, math.pi, n=7)
+except ValueError as e:
+    print(e)  # "composite_simpson_13 requires even n, got n=7"
+```
+
+#### `composite_simpson_38(f, a, b, n, *, var='t', return_error=False)`
+
+```python
+# n=99 (3의 배수 필수)
+I = na.composite_simpson_38(math.sin, 0, math.pi, n=99)
+
+# n이 3의 배수 아니면 ValueError 발생
+try:
+    na.composite_simpson_38(math.sin, 0, math.pi, n=10)
+except ValueError as e:
+    print(e)  # "composite_simpson_38 requires n divisible by 3, got n=10"
+```
+
+#### `adaptive_simpson(f, a, b, *, tol=1e-10, max_depth=50, var='t', return_error=False)`
+
+명시적 스택으로 Python 재귀 제한 없이 깊은 구간 분할 처리. Richardson 보정 적용.
+
+```python
+I, err = na.adaptive_simpson(math.sin, 0, math.pi, tol=1e-12, return_error=True)
+# I ≈ 2.0,  err ≈ 3e-13
+```
+
+#### `mixed_simpson(f, a, b, n, *, var='t', return_error=False)`
+
+n이 짝수이면 합성 1/3, 홀수이면 앞 (n-3) 구간에 1/3, 끝 3 구간에 3/8 적용.
+
+```python
+I = na.mixed_simpson(math.sin, 0, math.pi, n=7)   # n=7 (홀수) → 1/3(n=4) + 3/8(3구간)
+I = na.mixed_simpson(math.sin, 0, math.pi, n=8)   # n=8 (짝수) → 합성 1/3
+```
+
+#### `simpson_irregular(x_points, y_points, *, return_error=False)`
+
+불균등 간격 비균등 Simpson 3점 공식 적용:
+```
+h0 = x1-x0, h1 = x2-x1
+I = (h0+h1)/6 * [(2-h1/h0)*f0 + (h0+h1)^2/(h0*h1)*f1 + (2-h0/h1)*f2]
+```
+
+```python
+x = [0.0, 0.3, 0.7, 1.2, 2.0]   # 불균등 간격
+y = [math.sin(xi) for xi in x]
+I = na.simpson_irregular(x, y)   # ≈ 1 - cos(2)
+
+# 입력 검증
+try:
+    na.simpson_irregular([0, 1, 0.5], [0, 1, 0.5])   # 단조 감소
+except ValueError as e:
+    print(e)  # "x_points must be monotonically increasing"
+```
+
+#### `romberg(f, a, b, *, depth=5, var='t', return_error=False)`
+
+Richardson 외삽 테이블:
+```
+T[i][0] = 사다리꼴 (2^i 구간)
+T[i][j] = (4^j * T[i][j-1] - T[i-1][j-1]) / (4^j - 1)
+```
+
+```python
+I = na.romberg(math.sin, 0, math.pi, depth=6)   # 오차 ≈ 1e-15
+I, err = na.romberg(math.sin, 0, math.pi, depth=6, return_error=True)
+# I ≈ 2.0, err ≈ 0.0
+```
+
+### 7.4 공통 파라미터
+
+| 파라미터 | 타입 | 설명 |
+|---|---|---|
+| `f` | callable 또는 PyExpr | 피적분 함수. PyExpr 입력 시 `evalf` 자동 적용 |
+| `a`, `b` | float | 적분 구간 하한, 상한 (`a < b`) |
+| `var` | str | PyExpr 변수명 (기본 `'t'`) |
+| `return_error` | bool | `True`이면 `(value, error_estimate)` 튜플 반환 |
+
+### 7.5 예외 처리
+
+| 예외 | 조건 |
+|---|---|
+| `ValueError("a must be less than b")` | `a >= b` |
+| `ValueError("composite_simpson_13 requires even n, got n=...")` | n이 홀수 |
+| `ValueError("composite_simpson_38 requires n divisible by 3, got n=...")` | n이 3의 배수 아님 |
+| `ValueError("mixed_simpson requires n >= 2, got n=...")` | n < 2 |
+| `ValueError("tol must be positive, ...")` | tol <= 0 |
+| `ValueError("romberg requires depth >= 1, ...")` | depth < 1 |
+| `ValueError("x_points must be monotonically increasing, ...")` | 단조성 위반 |
+| `ValueError("x_points[i] is NaN or Inf")` | NaN/Inf 포함 |
+| `TypeError("f must be callable or have lambdify method, ...")` | callable 아닌 입력 |
+| `RuntimeError("adaptive_simpson exceeded max_depth=...")` | max_depth 초과 |
+
+### 7.6 정확도 및 수치 안정성
+
+**Kahan 보상 누산**: 합성 Simpson 류의 내부 합산에 Kahan 알고리즘을 사용하여
+대규모 n(예: 10,000)에서도 부동소수점 누적 오차를 억제합니다.
+
+```python
+I_10k = na.composite_simpson_13(math.sin, 0, math.pi, n=10000)
+# |I_10k - 2.0| = 0.0  (double 정밀도 한계까지 정확)
+```
+
+**Richardson 오차 추정**: `return_error=True` 시 n 대비 n/2 구간으로 두 번 계산하고
+Richardson 계수(`15 = 2^4 - 1`)로 나눈 추정값을 반환합니다.
+
+**적응형 Richardson 보정**: `adaptive_simpson`은 각 수렴 구간에서
+`S2 + (S2 - S1) / 15` 보정을 적용하여 실제 오차가 tol보다 훨씬 작습니다.
+
+### 7.7 성능
+
+| 메서드 | 실측 (Windows 11, MinGW gcc 15.2.0) |
+|---|---|
+| `simpson_13` | 0.13 µs/call |
+| `composite_simpson_13 n=100` | 2.39 µs/call |
+| `composite_simpson_13 n=10000` | 219 µs/call |
+| `adaptive_simpson tol=1e-10` | 29 µs/call |
+| `romberg depth=6` | 1.97 µs/call |
+
+---
+
+## 8. 성능 벤치마크 (기본 함수)
 
 ### 측정 환경
 
@@ -744,7 +927,7 @@ python bench/perf_compare.py
 
 ---
 
-## 8. 정확도 보장
+## 9. 정확도 보장
 
 ### ULP 오차 측정 결과
 
@@ -779,7 +962,7 @@ exp(-745) → 5e-324 (subnormal 정상 처리)
 
 ---
 
-## 9. 구현 철학
+## 10. 구현 철학
 
 **자체 구현 원칙**: `libc.math`의 `sin`, `cos`, `exp`, `log` 등 elementary 함수를 직접 호출하지 않습니다.
 musl libc와 fdlibm의 bit-exact 계수를 그대로 인용하여 Cython + Horner-FMA 형태로 재구현합니다.
@@ -801,7 +984,7 @@ musl libc와 fdlibm의 bit-exact 계수를 그대로 인용하여 Cython + Horne
 
 ---
 
-## 10. 프로젝트 구조
+## 11. 프로젝트 구조
 
 ```
 mathlib/
@@ -837,6 +1020,11 @@ mathlib/
 │   ├── gcd/gcd.pyx
 │   ├── lcm/lcm.pyx
 │   ├── differentiation/differentiation.pyx
+│   ├── numerical_analysis/             # 수치해석 서브패키지
+│   │   ├── __init__.py                 # NumericalAnalysis 노출
+│   │   ├── numerical_analysis.pyx      # 메인 클래스 (Simpson 8종)
+│   │   ├── numerical_analysis.pxd      # cdef 선언
+│   │   └── _kahan.pxd                  # Kahan 누산 인라인 유틸
 │   └── laplace/                        # Laplace 변환 서브패키지 (C++ 백엔드)
 │       ├── __init__.py                 # 공개 API (Laplace, PyExpr, t, s, Sin, ...)
 │       ├── laplace_ast.pyx/.pxd        # PyExpr cdef class + 심볼·상수·함수 팩토리
@@ -857,7 +1045,8 @@ mathlib/
 │           ├── subst.hpp               # 기호 치환
 │           └── capi.hpp                # Cython ↔ C++ extern "C" 인터페이스
 ├── bench/
-│   └── perf_compare.py                 # math vs mathlib 속도 비교 벤치마크
+│   ├── perf_compare.py                 # math vs mathlib 속도 비교 벤치마크
+│   └── numerical_analysis_tests.py     # NumericalAnalysis Simpson 8종 검증
 ├── tests/                              # 카테고리별 테스트 스크립트 (18개)
 └── docs/
     ├── algorithm_reference.md          # 알고리즘 상세 및 bit-exact 계수
@@ -877,7 +1066,7 @@ import math_library as m   # 올바른 임포트
 
 ---
 
-## 11. 개발 및 테스트
+## 12. 개발 및 테스트
 
 ### 빌드
 
@@ -910,7 +1099,7 @@ cython -a src/math_library/_core/trigonometric.pyx
 
 ---
 
-## 12. 현재 한계 및 TODO
+## 13. 현재 한계 및 TODO
 
 ### 해결된 항목 (Phase 1/2 완료)
 
@@ -935,7 +1124,7 @@ cython -a src/math_library/_core/trigonometric.pyx
 
 ---
 
-## 13. 라이선스
+## 14. 라이선스
 
 MIT License — `LICENSE` 파일 참조.
 
@@ -943,7 +1132,7 @@ MIT License — `LICENSE` 파일 참조.
 
 ---
 
-## 14. 참고문헌
+## 15. 참고문헌
 
 1. **musl libc** — git.musl-libc.org/cgit/musl — sin, cos, exp, log 등 bit-exact 계수 출처
 2. **fdlibm / FreeBSD msun** — 역삼각·쌍곡 함수 계수의 원 출처 (Sun Microsystems)

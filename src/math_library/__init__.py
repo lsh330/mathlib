@@ -135,6 +135,9 @@ from .lcm.lcm import lcm
 # ------------------------------------------------------------------ 미분
 from .differentiation import Differentiation
 
+# ------------------------------------------------------------------ 수치해석
+from .numerical_analysis import NumericalAnalysis
+
 __all__ = [
     # 상수
     "pi", "e", "epsilon",
@@ -172,4 +175,6 @@ __all__ = [
     "isnan", "isinf", "isfinite", "isclose",
     # 미분
     "Differentiation",
+    # 수치해석
+    "NumericalAnalysis",
 ]
