@@ -6,67 +6,27 @@
       "type": "default",
       "contextType": "build",
       "taskLabel": "Build Cython (MSVC, inplace)",
-      "command": "python",
-      "args": [
-        "setup.py",
-        "build_ext",
-        "--inplace",
-        "-j",
-        "8",
-        "--compiler=msvc"
-      ],
+      "command": "${workspaceRoot}\\.vs\\build.cmd",
+      "args": [],
       "workingDirectory": "${workspaceRoot}",
-      "inheritEnvironments": [ "msvc_x64_x64" ],
-      "envVars": [
-        {
-          "name": "PATH",
-          "value": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;${env.PATH}"
-        }
-      ]
-    },
-    {
-      "appliesTo": "*",
-      "type": "default",
-      "contextType": "build",
-      "taskLabel": "Install Editable (pip install -e .)",
-      "command": "python",
-      "args": [
-        "-m",
-        "pip",
-        "install",
-        "-e",
-        ".",
-        "--no-build-isolation",
-        "--config-settings=--build-option=--compiler=msvc"
-      ],
-      "workingDirectory": "${workspaceRoot}",
-      "inheritEnvironments": [ "msvc_x64_x64" ],
-      "envVars": [
-        {
-          "name": "PATH",
-          "value": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;${env.PATH}"
-        }
-      ]
-    },
-    {
-      "appliesTo": "*",
-      "type": "default",
-      "contextType": "custom",
-      "taskLabel": "Install Build Dependencies",
-      "command": "python",
-      "args": [ "-m", "pip", "install", "Cython>=3.1", "wheel", "numpy", "setuptools" ],
-      "workingDirectory": "${workspaceRoot}"
+      "presentation": { "echo": true, "reveal": "always", "panel": "shared", "clear": true }
     },
     {
       "appliesTo": "*",
       "type": "default",
       "contextType": "clean",
       "taskLabel": "Clean Build Artifacts",
-      "command": "python",
-      "args": [
-        "-c",
-        "import pathlib, shutil, glob; root=pathlib.Path('.'); [shutil.rmtree(p, ignore_errors=True) for p in ['build','dist'] if (root/p).exists()]; [pathlib.Path(f).unlink() for pat in ('src/math_library/**/*.pyd','src/math_library/**/*.c','src/math_library/**/*.cpp','src/math_library/**/*.html','src/math_library/**/*.obj') for f in glob.glob(pat, recursive=True) if 'laplace/cpp/' not in f.replace(chr(92),'/')]"
-      ],
+      "command": "${workspaceRoot}\\.vs\\clean.cmd",
+      "args": [],
+      "workingDirectory": "${workspaceRoot}"
+    },
+    {
+      "appliesTo": "*",
+      "type": "default",
+      "contextType": "custom",
+      "taskLabel": "Install Build Dependencies",
+      "command": "${workspaceRoot}\\.vs\\run.cmd",
+      "args": [ "-m", "pip", "install", "Cython>=3.1", "wheel", "numpy", "setuptools" ],
       "workingDirectory": "${workspaceRoot}"
     },
     {
@@ -74,48 +34,40 @@
       "type": "default",
       "contextType": "custom",
       "taskLabel": "Run pytest (all tests)",
-      "command": "python",
+      "command": "${workspaceRoot}\\.vs\\run.cmd",
       "args": [ "-m", "pytest", "tests", "-v" ],
-      "workingDirectory": "${workspaceRoot}",
-      "inheritEnvironments": [ "msvc_x64_x64" ],
-      "envVars": [
-        {
-          "name": "PATH",
-          "value": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;${env.PATH}"
-        }
-      ]
+      "workingDirectory": "${workspaceRoot}"
     },
     {
       "appliesTo": "tests/*.py",
       "type": "default",
       "contextType": "custom",
       "taskLabel": "Run pytest (current file)",
-      "command": "python",
+      "command": "${workspaceRoot}\\.vs\\run.cmd",
       "args": [ "-m", "pytest", "${file}", "-v" ],
-      "workingDirectory": "${workspaceRoot}",
-      "inheritEnvironments": [ "msvc_x64_x64" ],
-      "envVars": [
-        {
-          "name": "PATH",
-          "value": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;${env.PATH}"
-        }
-      ]
+      "workingDirectory": "${workspaceRoot}"
     },
     {
       "appliesTo": "bench/*.py",
       "type": "default",
       "contextType": "custom",
       "taskLabel": "Run bench (current file)",
-      "command": "python",
+      "command": "${workspaceRoot}\\.vs\\run.cmd",
       "args": [ "${file}" ],
-      "workingDirectory": "${workspaceRoot}",
-      "inheritEnvironments": [ "msvc_x64_x64" ],
-      "envVars": [
-        {
-          "name": "PATH",
-          "value": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;${env.PATH}"
-        }
-      ]
+      "workingDirectory": "${workspaceRoot}"
+    },
+    {
+      "appliesTo": "*",
+      "type": "default",
+      "contextType": "custom",
+      "taskLabel": "Install Editable (pip install -e .)",
+      "command": "${workspaceRoot}\\.vs\\run.cmd",
+      "args": [
+        "-m", "pip", "install", "-e", ".",
+        "--no-build-isolation",
+        "--config-settings=--build-option=--compiler=msvc"
+      ],
+      "workingDirectory": "${workspaceRoot}"
     }
   ]
 }

@@ -26,6 +26,7 @@ env/
 .vs/*
 !.vs/tasks.vs.json
 !.vs/launch.vs.json
+!.vs/*.cmd
 *.slnx.user
 *.suo
 .DS_Store
