@@ -695,7 +695,8 @@ print(f_back.evalf(t=2.5))   # 0.606530...  (= e^{-0.5})
 ## 7. 수치해석 (NumericalAnalysis)
 
 `math_library.NumericalAnalysis` 클래스는 외부 의존성 없이 Cython 자체 구현된 수치해석 알고리즘을 제공합니다.
-Simpson 적분법 8종, 근 찾기 2종(Newton-Raphson, Secant), ODE 적분 5종(Euler, RK2, RK4, DOPRI5, RKF45)으로 총 15개 메서드를 제공합니다.
+Simpson 적분법 8종, 근 찾기 2종(Newton-Raphson, Secant), ODE 적분 5종(Euler, RK2, RK4, DOPRI5, RKF45),
+Gauss-Legendre 적분 2종, Dormand-Prince RK78, Adams 계열 3종(AB/AM/PECE)으로 총 **21개 메서드**를 제공합니다.
 
 ### 7.1 빠른 시작
 
@@ -1010,6 +1011,49 @@ y = na.rk4(-2*t*y_sym, 0.0, 1.0, 1.0, n=200, vars=('t', 'y'))
 | `rk4 n=1000` | 117 µs/call |
 | `rk45 tol=1e-8` | 2.56 µs/call |
 | `rk_fehlberg tol=1e-8` | 2.69 µs/call |
+| `rk78 tol=1e-10` | 4.5 µs/call |
+| `predictor_corrector PC4 n=100` | 25 µs/call |
+
+### 7.7 Gauss-Legendre 적분
+
+n-point Gauss-Legendre 구적법 (n = 2 ~ 16):
+
+```python
+I = na.gauss_legendre(math.sin, 0, math.pi, n=5)          # 단일 구간
+I = na.composite_gauss_legendre(math.sin, 0, math.pi, m=10, n=5)  # 합성
+```
+
+| 메서드 | 설명 | 제약 |
+|---|---|---|
+| `gauss_legendre(f, a, b, n=5)` | n-point GL (2 ≤ n ≤ 16) | (2n-1)차 다항식 정확 |
+| `composite_gauss_legendre(f, a, b, m, n=5)` | m 구간 합성 GL | m ≥ 1 |
+
+**정확도**: n=5로 9차 다항식 정확 (오차 < 1e-14). 초월함수는 composite 사용 권장.
+**성능**: `gauss_legendre n=5` — 178 ns/call.
+
+### 7.9 RK78 (Dormand-Prince 8(7))
+
+Hairer 등 "Solving ODEs I" Table II.5.4 기반 13-stage 적응형 방법:
+
+```python
+y_end = na.rk78(f, t0, y0, t_end, tol=1e-12)
+```
+
+### 7.10 Adams 계열 (AB / AM / PECE)
+
+다단계 적분법 3종. 부트스트랩은 RK4 사용:
+
+```python
+y_end = na.adams_bashforth(f, t0, y0, t_end, n=1000, order=4)   # explicit
+y_end = na.adams_moulton(f, t0, y0, t_end, n=1000, order=4)     # implicit
+y_end = na.predictor_corrector(f, t0, y0, t_end, n=1000, order=4)  # PECE
+```
+
+| 메서드 | 차수 범위 | 특성 |
+|---|---|---|
+| `adams_bashforth` | 1 ~ 5 | explicit, 조건부 안정 |
+| `adams_moulton` | 1 ~ 5 | implicit, fixed-point 수렴 |
+| `predictor_corrector` | 2 ~ 5 | PECE, 매 step 1회 교정 |
 
 ---
 

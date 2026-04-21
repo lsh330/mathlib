@@ -928,3 +928,110 @@ _fp = lambda x: self._differ.single_variable(_f, x)
 `fprime=None`이어도 고정밀 수치 미분을 제공합니다.
 
 **설계 원칙**: 기존 인프라를 재활용하여 코드 중복을 방지하고, 사용자가 명시적 도함수를 알고 있으면 빠른 경로(`fprime` 인수)를 제공합니다.
+
+---
+
+## 20. Gauss-Legendre 구적법
+
+### 이론
+
+n-point Gauss-Legendre 구적법은 [-1, 1] 구간에서 정의된 적분을 다음으로 근사합니다:
+
+```
+∫_{-1}^{1} f(u) du ≈ Σ_{i=0}^{n-1} w_i · f(u_i)
+```
+
+임의 구간 [a, b]로 변환:
+```
+x_i = (b-a)/2 · u_i + (a+b)/2
+∫_a^b f(x) dx ≈ (b-a)/2 · Σ w_i · f(x_i)
+```
+
+### 수렴성
+
+n-point GL은 차수 2n-1 이하의 다항식에 대해 정확한 결과를 줍니다(정확도 2n-1).
+초월함수(sin, exp 등)에 대해서는 절단 오차가 발생하며, `composite_gauss_legendre`로 구간을 분할하면 수렴 속도를 높일 수 있습니다.
+
+### 노드/가중치 출처
+
+`numpy.polynomial.legendre.leggauss` 참조값으로 검증된 계수 (n=2~16, 15~16 유효숫자). 원출처: Abramowitz & Stegun, "Handbook of Mathematical Functions", Table 25.4 (1964).
+
+### 사용 예
+
+```python
+# 단일 구간
+I = na.gauss_legendre(lambda x: x**9, 0, 1, n=5)      # 정확 (9 = 2*5-1)
+I, err = na.gauss_legendre(math.sin, 0, math.pi, n=5, return_error=True)
+
+# 합성 (정밀도 향상)
+I = na.composite_gauss_legendre(math.sin, 0, math.pi, m=10, n=5)
+```
+
+---
+
+## 21. RK78 (Dormand-Prince 8(7))
+
+### Butcher tableau 설명
+
+Hairer, Nørsett, Wanner, "Solving ODEs I", 2nd Ed. 1993, Table II.5.4의 13-stage 방법입니다.
+
+- **13 stage**: k[0] ~ k[12], FSAL 없음 (B8[12]=0)
+- **8차 주 솔루션** (B8, bhat): 더 정확한 해로 y를 전진
+- **7차 오차 추정** (B7, b): 오차 = |y8 - y7|
+
+### 적응형 step 제어
+
+```
+h_new = h * 0.9 * (tol / err)^{1/8}   # 8차 방법
+h_new = clamp(h_new, 0.1*h, 5.0*h)
+```
+
+### 사용 예
+
+```python
+y_end = na.rk78(lambda t, y: -y, 0, 1, 1, tol=1e-12)   # err < 1e-13
+traj  = na.rk78(f, t0, y0, t_end, return_trajectory=True)
+```
+
+---
+
+## 22. Adams 계열 (AB / AM / PC)
+
+### 다단계 방법 이론
+
+Adams 방법은 이전 step의 함수값 이력을 재활용하여 고차 정확도를 얻습니다.
+
+**Adams-Bashforth (explicit, order k)**:
+```
+y_{n+1} = y_n + h · Σ_{j=0}^{k-1} β_j · f_{n-j}
+```
+
+**Adams-Moulton (implicit, order k)**:
+```
+y_{n+1} = y_n + h · [β*_0 · f(t_{n+1}, y_{n+1}) + Σ_{j=1}^{k} β*_j · f_{n+1-j}]
+```
+
+### 부트스트랩
+
+첫 (order-1) step은 RK4로 계산하여 이력을 초기화합니다.
+
+### PECE 알고리즘
+
+```
+P: y_p  = AB_step(y_hist, f_hist)      # Predict
+E: f_p  = f(t_{n+1}, y_p)             # Evaluate
+C: y_c  = AM_step(y, f_p, f_hist)     # Correct (1회)
+E: f_c  = f(t_{n+1}, y_c)             # Evaluate
+```
+
+### 계수 출처
+
+Hairer, Nørsett, Wanner, "Solving ODEs I", Table III.1.1. order 1~5.
+
+### 사용 예
+
+```python
+y_ab = na.adams_bashforth(f, 0, 1, 1, n=1000, order=4)
+y_am = na.adams_moulton(f, 0, 1, 1, n=1000, order=4)
+y_pc = na.predictor_corrector(f, 0, 1, 1, n=1000, order=4)
+```

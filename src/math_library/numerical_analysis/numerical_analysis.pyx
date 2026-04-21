@@ -8,27 +8,568 @@
 #
 # numerical_analysis.pyx
 #
-# NumericalAnalysis 클래스 — Simpson 적분법 8종 + Newton-Raphson/Secant + RK 5종 구현
+# NumericalAnalysis 클래스 — Simpson 적분법 8종 + Newton-Raphson/Secant + RK 5종
+#                          + Gauss-Legendre 2종 + RK78 + Adams 3종 = 21 메서드
 #
 # 구현 목록:
-#   1. simpson_13           — 3점 단순 Simpson 1/3
-#   2. simpson_38           — 4점 단순 Simpson 3/8
-#   3. composite_simpson_13 — n 구간 합성 Simpson 1/3 (n 짝수)
-#   4. composite_simpson_38 — n 구간 합성 Simpson 3/8 (n 3의 배수)
-#   5. adaptive_simpson     — 적응형 재귀 Simpson (명시적 스택)
-#   6. mixed_simpson        — 혼합 Simpson (임의 n >= 2)
-#   7. simpson_irregular    — 불균등 간격 Simpson
-#   8. romberg              — Romberg 적분 (Richardson 확장)
-#   9. newton_raphson       — Newton-Raphson 근 찾기 (Differentiation 재활용)
-#  10. secant_method        — Secant 근 찾기
-#  11. euler                — Euler 1차 ODE 적분
-#  12. rk2                  — 2차 Runge-Kutta (midpoint/heun/ralston)
-#  13. rk4                  — 고전 4차 Runge-Kutta
-#  14. rk45                 — Dormand-Prince 5(4) 적응형 (DOPRI5/FSAL)
-#  15. rk_fehlberg          — Fehlberg RKF45 적응형
+#   1. simpson_13               — 3점 단순 Simpson 1/3
+#   2. simpson_38               — 4점 단순 Simpson 3/8
+#   3. composite_simpson_13     — n 구간 합성 Simpson 1/3 (n 짝수)
+#   4. composite_simpson_38     — n 구간 합성 Simpson 3/8 (n 3의 배수)
+#   5. adaptive_simpson         — 적응형 재귀 Simpson (명시적 스택)
+#   6. mixed_simpson            — 혼합 Simpson (임의 n >= 2)
+#   7. simpson_irregular        — 불균등 간격 Simpson
+#   8. romberg                  — Romberg 적분 (Richardson 확장)
+#   9. newton_raphson           — Newton-Raphson 근 찾기 (Differentiation 재활용)
+#  10. secant_method            — Secant 근 찾기
+#  11. euler                    — Euler 1차 ODE 적분
+#  12. rk2                      — 2차 Runge-Kutta (midpoint/heun/ralston)
+#  13. rk4                      — 고전 4차 Runge-Kutta
+#  14. rk45                     — Dormand-Prince 5(4) 적응형 (DOPRI5/FSAL)
+#  15. rk_fehlberg              — Fehlberg RKF45 적응형
+#  16. gauss_legendre           — n-point Gauss-Legendre 적분 (n=2..16)
+#  17. composite_gauss_legendre — m 구간 합성 Gauss-Legendre
+#  18. rk78                     — Dormand-Prince 8(7) 13-stage 적응형
+#  19. adams_bashforth          — Explicit multistep (order=1..5)
+#  20. adams_moulton            — Implicit multistep (order=1..5)
+#  21. predictor_corrector      — PECE Adams AB/AM (order=2..5)
 
 from libc.math cimport fabs, isnan, isinf
 include "_kahan.pxd"
+
+# ================================================================== Gauss-Legendre 테이블
+# 출처: Abramowitz & Stegun, Table 25.4 (18 유효숫자)
+#       보완: NIST DLMF §3.5(v), Dhavala online tables
+#
+# 평탄화 배열: n=2..16 순서로 노드/가중치 연속 저장
+# 오프셋: _GL_OFFSETS[n] → 해당 n의 첫 번째 원소 인덱스
+#   n=2:  0  (2개)
+#   n=3:  2  (3개)
+#   n=4:  5  (4개)
+#   n=5:  9  (5개)
+#   n=6:  14 (6개)
+#   n=7:  20 (7개)
+#   n=8:  27 (8개)
+#   n=9:  35 (9개)
+#   n=10: 44 (10개)
+#   n=11: 54 (11개)
+#   n=12: 65 (12개)
+#   n=13: 77 (13개)
+#   n=14: 90 (14개)
+#   n=15: 104 (15개)
+#   n=16: 119 (16개) → 총 135개
+
+cdef int _GL_OFFSETS[17]
+_GL_OFFSETS[0]  = 0
+_GL_OFFSETS[1]  = 0
+_GL_OFFSETS[2]  = 0
+_GL_OFFSETS[3]  = 2
+_GL_OFFSETS[4]  = 5
+_GL_OFFSETS[5]  = 9
+_GL_OFFSETS[6]  = 14
+_GL_OFFSETS[7]  = 20
+_GL_OFFSETS[8]  = 27
+_GL_OFFSETS[9]  = 35
+_GL_OFFSETS[10] = 44
+_GL_OFFSETS[11] = 54
+_GL_OFFSETS[12] = 65
+_GL_OFFSETS[13] = 77
+_GL_OFFSETS[14] = 90
+_GL_OFFSETS[15] = 104
+_GL_OFFSETS[16] = 119
+
+cdef double _GL_NODES_FLAT[135]
+# n=2: ±0.5773502691896257
+_GL_NODES_FLAT[0]  = -0.5773502691896257645454878
+_GL_NODES_FLAT[1]  =  0.5773502691896257645454878
+# n=3: 0, ±0.7745966692414834
+_GL_NODES_FLAT[2]  = -0.7745966692414833770358531
+_GL_NODES_FLAT[3]  =  0.0
+_GL_NODES_FLAT[4]  =  0.7745966692414833770358531
+# n=4: ±0.3399810435848563, ±0.8611363115940526
+_GL_NODES_FLAT[5]  = -0.8611363115940525752239465
+_GL_NODES_FLAT[6]  = -0.3399810435848562648026658
+_GL_NODES_FLAT[7]  =  0.3399810435848562648026658
+_GL_NODES_FLAT[8]  =  0.8611363115940525752239465
+# n=5: 0, ±0.5384693101056831, ±0.9061798459386640
+_GL_NODES_FLAT[9]  = -0.9061798459386639927976269
+_GL_NODES_FLAT[10] = -0.5384693101056830910363144
+_GL_NODES_FLAT[11] =  0.0
+_GL_NODES_FLAT[12] =  0.5384693101056830910363144
+_GL_NODES_FLAT[13] =  0.9061798459386639927976269
+# n=6: ±0.2386191860831969, ±0.6612093864662645, ±0.9324695142031521
+_GL_NODES_FLAT[14] = -0.9324695142031520278123016
+_GL_NODES_FLAT[15] = -0.6612093864662645136613996
+_GL_NODES_FLAT[16] = -0.2386191860831969086305017
+_GL_NODES_FLAT[17] =  0.2386191860831969086305017
+_GL_NODES_FLAT[18] =  0.6612093864662645136613996
+_GL_NODES_FLAT[19] =  0.9324695142031520278123016
+# n=7: 0, ±0.4058451513773972, ±0.7415311855993945, ±0.9491079123427585
+_GL_NODES_FLAT[20] = -0.9491079123427585245261897
+_GL_NODES_FLAT[21] = -0.7415311855993944398638648
+_GL_NODES_FLAT[22] = -0.4058451513773971669066064
+_GL_NODES_FLAT[23] =  0.0
+_GL_NODES_FLAT[24] =  0.4058451513773971669066064
+_GL_NODES_FLAT[25] =  0.7415311855993944398638648
+_GL_NODES_FLAT[26] =  0.9491079123427585245261897
+# n=8: ±0.1834346424956498, ±0.5255324099163290, ±0.7966664774136267, ±0.9602898564975363
+_GL_NODES_FLAT[27] = -0.9602898564975362316835609
+_GL_NODES_FLAT[28] = -0.7966664774136267395915539
+_GL_NODES_FLAT[29] = -0.5255324099163289858177390
+_GL_NODES_FLAT[30] = -0.1834346424956498049394761
+_GL_NODES_FLAT[31] =  0.1834346424956498049394761
+_GL_NODES_FLAT[32] =  0.5255324099163289858177390
+_GL_NODES_FLAT[33] =  0.7966664774136267395915539
+_GL_NODES_FLAT[34] =  0.9602898564975362316835609
+# n=9: 0, ±0.3242534234038089, ±0.6133714327005904, ±0.8360311073266358, ±0.9681602395076261
+_GL_NODES_FLAT[35] = -0.9681602395076260898355762
+_GL_NODES_FLAT[36] = -0.8360311073266357942994298
+_GL_NODES_FLAT[37] = -0.6133714327005903973087020
+_GL_NODES_FLAT[38] = -0.3242534234038089290385380
+_GL_NODES_FLAT[39] =  0.0
+_GL_NODES_FLAT[40] =  0.3242534234038089290385380
+_GL_NODES_FLAT[41] =  0.6133714327005903973087020
+_GL_NODES_FLAT[42] =  0.8360311073266357942994298
+_GL_NODES_FLAT[43] =  0.9681602395076260898355762
+# n=10: ±0.1488743389816312, ±0.4333953941292472, ±0.6794095682990244, ±0.8650633666889845, ±0.9739065285171717
+_GL_NODES_FLAT[44] = -0.9739065285171717200779640
+_GL_NODES_FLAT[45] = -0.8650633666889845107320967
+_GL_NODES_FLAT[46] = -0.6794095682990244062343274
+_GL_NODES_FLAT[47] = -0.4333953941292471907992659
+_GL_NODES_FLAT[48] = -0.1488743389816312108848260
+_GL_NODES_FLAT[49] =  0.1488743389816312108848260
+_GL_NODES_FLAT[50] =  0.4333953941292471907992659
+_GL_NODES_FLAT[51] =  0.6794095682990244062343274
+_GL_NODES_FLAT[52] =  0.8650633666889845107320967
+_GL_NODES_FLAT[53] =  0.9739065285171717200779640
+# n=11: 0, ±0.2695431559523450, ±0.5190961292068118, ±0.7301520055740494, ±0.8870625997680953, ±0.9782286581460570
+_GL_NODES_FLAT[54] = -0.9782286581460569928039380
+_GL_NODES_FLAT[55] = -0.8870625997680952990751578
+_GL_NODES_FLAT[56] = -0.7301520055740493240934163
+_GL_NODES_FLAT[57] = -0.5190961292068118159257257
+_GL_NODES_FLAT[58] = -0.2695431559523449723315320
+_GL_NODES_FLAT[59] =  0.0
+_GL_NODES_FLAT[60] =  0.2695431559523449723315320
+_GL_NODES_FLAT[61] =  0.5190961292068118159257257
+_GL_NODES_FLAT[62] =  0.7301520055740493240934163
+_GL_NODES_FLAT[63] =  0.8870625997680952990751578
+_GL_NODES_FLAT[64] =  0.9782286581460569928039380
+# n=12: ±0.1252334085114689, ±0.3678314989981802, ±0.5873179542866175, ±0.7699026741943047, ±0.9041172563704749, ±0.9815606342467193
+_GL_NODES_FLAT[65] = -0.9815606342467192506905491
+_GL_NODES_FLAT[66] = -0.9041172563704748566784659
+_GL_NODES_FLAT[67] = -0.7699026741943046870368938
+_GL_NODES_FLAT[68] = -0.5873179542866174472967024
+_GL_NODES_FLAT[69] = -0.3678314989981801937526915
+_GL_NODES_FLAT[70] = -0.1252334085114689154724414
+_GL_NODES_FLAT[71] =  0.1252334085114689154724414
+_GL_NODES_FLAT[72] =  0.3678314989981801937526915
+_GL_NODES_FLAT[73] =  0.5873179542866174472967024
+_GL_NODES_FLAT[74] =  0.7699026741943046870368938
+_GL_NODES_FLAT[75] =  0.9041172563704748566784659
+_GL_NODES_FLAT[76] =  0.9815606342467192506905491
+# n=13: 0, ±0.2304583159551348, ±0.4484927510364469, ±0.6423493394403402, ±0.8015780907333099, ±0.9175983992229779, ±0.9841830547185881
+_GL_NODES_FLAT[77] = -0.9841830547185880975394739
+_GL_NODES_FLAT[78] = -0.9175983992229779652065478
+_GL_NODES_FLAT[79] = -0.8015780907333099127942065
+_GL_NODES_FLAT[80] = -0.6423493394403402206439846
+_GL_NODES_FLAT[81] = -0.4484927510364468528779129
+_GL_NODES_FLAT[82] = -0.2304583159551347940655281
+_GL_NODES_FLAT[83] =  0.0
+_GL_NODES_FLAT[84] =  0.2304583159551347940655281
+_GL_NODES_FLAT[85] =  0.4484927510364468528779129
+_GL_NODES_FLAT[86] =  0.6423493394403402206439846
+_GL_NODES_FLAT[87] =  0.8015780907333099127942065
+_GL_NODES_FLAT[88] =  0.9175983992229779652065478
+_GL_NODES_FLAT[89] =  0.9841830547185880975394739
+# n=14: ±0.1080549487073436, ±0.3191123689278897, ±0.5152486363581540, ±0.6872929048116855, ±0.8272013150697650, ±0.9284348836635735, ±0.9862838086968123
+_GL_NODES_FLAT[90]  = -0.9862838086968123388415973
+_GL_NODES_FLAT[91]  = -0.9284348836635735173363911
+_GL_NODES_FLAT[92]  = -0.8272013150697649931897947
+_GL_NODES_FLAT[93]  = -0.6872929048116854701480198
+_GL_NODES_FLAT[94]  = -0.5152486363581540919652907
+_GL_NODES_FLAT[95]  = -0.3191123689278897604515722
+_GL_NODES_FLAT[96]  = -0.1080549487073436620662447
+_GL_NODES_FLAT[97]  =  0.1080549487073436620662447
+_GL_NODES_FLAT[98]  =  0.3191123689278897604515722
+_GL_NODES_FLAT[99]  =  0.5152486363581540919652907
+_GL_NODES_FLAT[100] =  0.6872929048116854701480198
+_GL_NODES_FLAT[101] =  0.8272013150697649931897947
+_GL_NODES_FLAT[102] =  0.9284348836635735173363911
+_GL_NODES_FLAT[103] =  0.9862838086968123388415973
+# n=15: 0, ±0.2011940939974345, ±0.3941513470775634, ±0.5709721726085388, ±0.7244177313601701, ±0.8482065834104272, ±0.9372733924007059, ±0.9879925180204854
+_GL_NODES_FLAT[104] = -0.9879925180204854284895657
+_GL_NODES_FLAT[105] = -0.9372733924007059043077589
+_GL_NODES_FLAT[106] = -0.8482065834104272162006483
+_GL_NODES_FLAT[107] = -0.7244177313601700474161861
+_GL_NODES_FLAT[108] = -0.5709721726085388475372267
+_GL_NODES_FLAT[109] = -0.3941513470775633498498730
+_GL_NODES_FLAT[110] = -0.2011940939974345223006283
+_GL_NODES_FLAT[111] =  0.0
+_GL_NODES_FLAT[112] =  0.2011940939974345223006283
+_GL_NODES_FLAT[113] =  0.3941513470775633498498730
+_GL_NODES_FLAT[114] =  0.5709721726085388475372267
+_GL_NODES_FLAT[115] =  0.7244177313601700474161861
+_GL_NODES_FLAT[116] =  0.8482065834104272162006483
+_GL_NODES_FLAT[117] =  0.9372733924007059043077589
+_GL_NODES_FLAT[118] =  0.9879925180204854284895657
+# n=16 (numpy.polynomial.legendre.leggauss 참조)
+_GL_NODES_FLAT[119] = -0.9894009349916499385102
+_GL_NODES_FLAT[120] = -0.9445750230732326002681
+_GL_NODES_FLAT[121] = -0.8656312023878317551961
+_GL_NODES_FLAT[122] = -0.7554044083550029986540
+_GL_NODES_FLAT[123] = -0.6178762444026437705702
+_GL_NODES_FLAT[124] = -0.4580167776572273696800
+_GL_NODES_FLAT[125] = -0.2816035507792589154263
+_GL_NODES_FLAT[126] = -0.0950125098376374405129
+_GL_NODES_FLAT[127] =  0.0950125098376374405129
+_GL_NODES_FLAT[128] =  0.2816035507792589154263
+_GL_NODES_FLAT[129] =  0.4580167776572273696800
+_GL_NODES_FLAT[130] =  0.6178762444026437705702
+_GL_NODES_FLAT[131] =  0.7554044083550029986540
+_GL_NODES_FLAT[132] =  0.8656312023878317551961
+_GL_NODES_FLAT[133] =  0.9445750230732326002681
+_GL_NODES_FLAT[134] =  0.9894009349916499385102
+
+cdef double _GL_WEIGHTS_FLAT[135]
+# n=2
+_GL_WEIGHTS_FLAT[0]  = 1.0
+_GL_WEIGHTS_FLAT[1]  = 1.0
+# n=3
+_GL_WEIGHTS_FLAT[2]  = 0.5555555555555555555555556   # 5/9
+_GL_WEIGHTS_FLAT[3]  = 0.8888888888888888888888889   # 8/9
+_GL_WEIGHTS_FLAT[4]  = 0.5555555555555555555555556
+# n=4
+_GL_WEIGHTS_FLAT[5]  = 0.3478548451374538573730639
+_GL_WEIGHTS_FLAT[6]  = 0.6521451548625461426269361
+_GL_WEIGHTS_FLAT[7]  = 0.6521451548625461426269361
+_GL_WEIGHTS_FLAT[8]  = 0.3478548451374538573730639
+# n=5
+_GL_WEIGHTS_FLAT[9]  = 0.2369268850561890875142640   # (322-13√70)/900
+_GL_WEIGHTS_FLAT[10] = 0.4786286704993664680412915
+_GL_WEIGHTS_FLAT[11] = 0.5688888888888888888888889   # 128/225
+_GL_WEIGHTS_FLAT[12] = 0.4786286704993664680412915
+_GL_WEIGHTS_FLAT[13] = 0.2369268850561890875142640
+# n=6
+_GL_WEIGHTS_FLAT[14] = 0.1713244923791703450402961
+_GL_WEIGHTS_FLAT[15] = 0.3607615730481386075698335
+_GL_WEIGHTS_FLAT[16] = 0.4679139345726910473898703
+_GL_WEIGHTS_FLAT[17] = 0.4679139345726910473898703
+_GL_WEIGHTS_FLAT[18] = 0.3607615730481386075698335
+_GL_WEIGHTS_FLAT[19] = 0.1713244923791703450402961
+# n=7
+_GL_WEIGHTS_FLAT[20] = 0.1294849661688696932706114
+_GL_WEIGHTS_FLAT[21] = 0.2797053914892766679014678
+_GL_WEIGHTS_FLAT[22] = 0.3818300505051189449503698
+_GL_WEIGHTS_FLAT[23] = 0.4179591836734693877551020   # 128/225 adjusted
+_GL_WEIGHTS_FLAT[24] = 0.3818300505051189449503698
+_GL_WEIGHTS_FLAT[25] = 0.2797053914892766679014678
+_GL_WEIGHTS_FLAT[26] = 0.1294849661688696932706114
+# n=8
+_GL_WEIGHTS_FLAT[27] = 0.1012285362903762591525314
+_GL_WEIGHTS_FLAT[28] = 0.2223810344533744705443560
+_GL_WEIGHTS_FLAT[29] = 0.3137066458778872873379622
+_GL_WEIGHTS_FLAT[30] = 0.3626837833783619829651504
+_GL_WEIGHTS_FLAT[31] = 0.3626837833783619829651504
+_GL_WEIGHTS_FLAT[32] = 0.3137066458778872873379622
+_GL_WEIGHTS_FLAT[33] = 0.2223810344533744705443560
+_GL_WEIGHTS_FLAT[34] = 0.1012285362903762591525314
+# n=9
+_GL_WEIGHTS_FLAT[35] = 0.0812743883615744119718922
+_GL_WEIGHTS_FLAT[36] = 0.1806481606948574040584720
+_GL_WEIGHTS_FLAT[37] = 0.2606106964029354623187429
+_GL_WEIGHTS_FLAT[38] = 0.3123470770400028400686304
+_GL_WEIGHTS_FLAT[39] = 0.3302393550012597631645251
+_GL_WEIGHTS_FLAT[40] = 0.3123470770400028400686304
+_GL_WEIGHTS_FLAT[41] = 0.2606106964029354623187429
+_GL_WEIGHTS_FLAT[42] = 0.1806481606948574040584720
+_GL_WEIGHTS_FLAT[43] = 0.0812743883615744119718922
+# n=10
+_GL_WEIGHTS_FLAT[44] = 0.0666713443086881375935688
+_GL_WEIGHTS_FLAT[45] = 0.1494513491505805931457763
+_GL_WEIGHTS_FLAT[46] = 0.2190863625159820439955349
+_GL_WEIGHTS_FLAT[47] = 0.2692667193099963550912269
+_GL_WEIGHTS_FLAT[48] = 0.2955242247147528701738930
+_GL_WEIGHTS_FLAT[49] = 0.2955242247147528701738930
+_GL_WEIGHTS_FLAT[50] = 0.2692667193099963550912269
+_GL_WEIGHTS_FLAT[51] = 0.2190863625159820439955349
+_GL_WEIGHTS_FLAT[52] = 0.1494513491505805931457763
+_GL_WEIGHTS_FLAT[53] = 0.0666713443086881375935688
+# n=11
+_GL_WEIGHTS_FLAT[54] = 0.0556685671161736664827537
+_GL_WEIGHTS_FLAT[55] = 0.1255803694649046246346943
+_GL_WEIGHTS_FLAT[56] = 0.1862902109277342514260976
+_GL_WEIGHTS_FLAT[57] = 0.2331937645919904799185237
+_GL_WEIGHTS_FLAT[58] = 0.2628045445102466621806889
+_GL_WEIGHTS_FLAT[59] = 0.2729250867779006307144835
+_GL_WEIGHTS_FLAT[60] = 0.2628045445102466621806889
+_GL_WEIGHTS_FLAT[61] = 0.2331937645919904799185237
+_GL_WEIGHTS_FLAT[62] = 0.1862902109277342514260976
+_GL_WEIGHTS_FLAT[63] = 0.1255803694649046246346943
+_GL_WEIGHTS_FLAT[64] = 0.0556685671161736664827537
+# n=12
+_GL_WEIGHTS_FLAT[65] = 0.0471753363865118271946160
+_GL_WEIGHTS_FLAT[66] = 0.1069393259953184309602547
+_GL_WEIGHTS_FLAT[67] = 0.1600783285433462263346525
+_GL_WEIGHTS_FLAT[68] = 0.2031674267230659217490645
+_GL_WEIGHTS_FLAT[69] = 0.2334925365383548087608499
+_GL_WEIGHTS_FLAT[70] = 0.2491470458134027850005624
+_GL_WEIGHTS_FLAT[71] = 0.2491470458134027850005624
+_GL_WEIGHTS_FLAT[72] = 0.2334925365383548087608499
+_GL_WEIGHTS_FLAT[73] = 0.2031674267230659217490645
+_GL_WEIGHTS_FLAT[74] = 0.1600783285433462263346525
+_GL_WEIGHTS_FLAT[75] = 0.1069393259953184309602547
+_GL_WEIGHTS_FLAT[76] = 0.0471753363865118271946160
+# n=13
+_GL_WEIGHTS_FLAT[77] = 0.0404840047653158795200216
+_GL_WEIGHTS_FLAT[78] = 0.0921214998377284593616342
+_GL_WEIGHTS_FLAT[79] = 0.1388735102197872384636018
+_GL_WEIGHTS_FLAT[80] = 0.1781459807619457382800467
+_GL_WEIGHTS_FLAT[81] = 0.2078160475368885023125232
+_GL_WEIGHTS_FLAT[82] = 0.2262831802628972384120902
+_GL_WEIGHTS_FLAT[83] = 0.2325515532308739101945895
+_GL_WEIGHTS_FLAT[84] = 0.2262831802628972384120902
+_GL_WEIGHTS_FLAT[85] = 0.2078160475368885023125232
+_GL_WEIGHTS_FLAT[86] = 0.1781459807619457382800467
+_GL_WEIGHTS_FLAT[87] = 0.1388735102197872384636018
+_GL_WEIGHTS_FLAT[88] = 0.0921214998377284593616342
+_GL_WEIGHTS_FLAT[89] = 0.0404840047653158795200216
+# n=14
+_GL_WEIGHTS_FLAT[90]  = 0.0351194603317518630318329
+_GL_WEIGHTS_FLAT[91]  = 0.0801580871597602098056333
+_GL_WEIGHTS_FLAT[92]  = 0.1215185706879031846894148
+_GL_WEIGHTS_FLAT[93]  = 0.1572031671581935345696019
+_GL_WEIGHTS_FLAT[94]  = 0.1855383974779378137417166
+_GL_WEIGHTS_FLAT[95]  = 0.2051984637212956039659241
+_GL_WEIGHTS_FLAT[96]  = 0.2152638534631577901958764
+_GL_WEIGHTS_FLAT[97]  = 0.2152638534631577901958764
+_GL_WEIGHTS_FLAT[98]  = 0.2051984637212956039659241
+_GL_WEIGHTS_FLAT[99]  = 0.1855383974779378137417166
+_GL_WEIGHTS_FLAT[100] = 0.1572031671581935345696019
+_GL_WEIGHTS_FLAT[101] = 0.1215185706879031846894148
+_GL_WEIGHTS_FLAT[102] = 0.0801580871597602098056333
+_GL_WEIGHTS_FLAT[103] = 0.0351194603317518630318329
+# n=15
+_GL_WEIGHTS_FLAT[104] = 0.0307532419961172683546284
+_GL_WEIGHTS_FLAT[105] = 0.0703660474881081247092674
+_GL_WEIGHTS_FLAT[106] = 0.1071592204671719350118695
+_GL_WEIGHTS_FLAT[107] = 0.1395706779261543144478048
+_GL_WEIGHTS_FLAT[108] = 0.1662692058169939335532009
+_GL_WEIGHTS_FLAT[109] = 0.1861610000155622110268006
+_GL_WEIGHTS_FLAT[110] = 0.1984314853271115764561183
+_GL_WEIGHTS_FLAT[111] = 0.2025782419255612728806202
+_GL_WEIGHTS_FLAT[112] = 0.1984314853271115764561183
+_GL_WEIGHTS_FLAT[113] = 0.1861610000155622110268006
+_GL_WEIGHTS_FLAT[114] = 0.1662692058169939335532009
+_GL_WEIGHTS_FLAT[115] = 0.1395706779261543144478048
+_GL_WEIGHTS_FLAT[116] = 0.1071592204671719350118695
+_GL_WEIGHTS_FLAT[117] = 0.0703660474881081247092674
+_GL_WEIGHTS_FLAT[118] = 0.0307532419961172683546284
+# n=16 (numpy.polynomial.legendre.leggauss 참조)
+_GL_WEIGHTS_FLAT[119] = 0.0271524594117541762106
+_GL_WEIGHTS_FLAT[120] = 0.0622535239386474564816
+_GL_WEIGHTS_FLAT[121] = 0.0951585116824926052770
+_GL_WEIGHTS_FLAT[122] = 0.1246289712555340711830
+_GL_WEIGHTS_FLAT[123] = 0.1495959888165767082135
+_GL_WEIGHTS_FLAT[124] = 0.1691565193950026468883
+_GL_WEIGHTS_FLAT[125] = 0.1826034150449236392877
+_GL_WEIGHTS_FLAT[126] = 0.1894506104550686409471
+_GL_WEIGHTS_FLAT[127] = 0.1894506104550686409471
+_GL_WEIGHTS_FLAT[128] = 0.1826034150449236392877
+_GL_WEIGHTS_FLAT[129] = 0.1691565193950026468883
+_GL_WEIGHTS_FLAT[130] = 0.1495959888165767082135
+_GL_WEIGHTS_FLAT[131] = 0.1246289712555340711830
+_GL_WEIGHTS_FLAT[132] = 0.0951585116824926052770
+_GL_WEIGHTS_FLAT[133] = 0.0622535239386474564816
+_GL_WEIGHTS_FLAT[134] = 0.0271524594117541762106
+
+# ================================================================== Dormand-Prince 8(7) 테이블
+# 출처: Hairer, Nørsett, Wanner, "Solving ODEs I", 2nd Ed. 1993, Table II.5.4
+# 13-stage. B8 = 8차 주 솔루션(bhat), B7 = 7차 오차 추정(b).
+# 오차 = B7 - B8 사용.
+#
+# C 노드
+cdef double _DP_C[13]
+_DP_C[0]  = 0.0
+_DP_C[1]  = 1.0/18.0
+_DP_C[2]  = 1.0/12.0
+_DP_C[3]  = 1.0/8.0
+_DP_C[4]  = 5.0/16.0
+_DP_C[5]  = 3.0/8.0
+_DP_C[6]  = 59.0/400.0
+_DP_C[7]  = 93.0/200.0
+_DP_C[8]  = 5490023248.0/9719169821.0
+_DP_C[9]  = 13.0/20.0
+_DP_C[10] = 1201146811.0/1299019798.0
+_DP_C[11] = 1.0
+_DP_C[12] = 1.0
+
+# A 계수 (하삼각)
+cdef double _DP_A[13][13]
+cdef int _dp_i, _dp_j
+for _dp_i in range(13):
+    for _dp_j in range(13):
+        _DP_A[_dp_i][_dp_j] = 0.0
+
+_DP_A[1][0]  =  1.0/18.0
+_DP_A[2][0]  =  1.0/48.0
+_DP_A[2][1]  =  1.0/16.0
+_DP_A[3][0]  =  1.0/32.0
+_DP_A[3][2]  =  3.0/32.0
+_DP_A[4][0]  =  5.0/16.0
+_DP_A[4][2]  = -75.0/64.0
+_DP_A[4][3]  =  75.0/64.0
+_DP_A[5][0]  =  3.0/80.0
+_DP_A[5][3]  =  3.0/16.0
+_DP_A[5][4]  =  3.0/20.0
+_DP_A[6][0]  =  29443841.0/614563906.0
+_DP_A[6][3]  =  77736538.0/692538347.0
+_DP_A[6][4]  = -28693883.0/1125000000.0
+_DP_A[6][5]  =  23124283.0/1800000000.0
+_DP_A[7][0]  =  16016141.0/946692911.0
+_DP_A[7][3]  =  61564180.0/158732637.0
+_DP_A[7][4]  =  22789713.0/633445777.0
+_DP_A[7][5]  =  545815736.0/2771057229.0
+_DP_A[7][6]  = -180193667.0/1043307555.0
+_DP_A[8][0]  =  39632708.0/573591083.0
+_DP_A[8][3]  = -433636366.0/683701615.0
+_DP_A[8][4]  = -421739975.0/2616292301.0
+_DP_A[8][5]  =  100302831.0/723423059.0
+_DP_A[8][6]  =  790204164.0/839813087.0
+_DP_A[8][7]  =  800635310.0/3783071287.0
+_DP_A[9][0]  =  246121993.0/1340847787.0
+_DP_A[9][3]  = -37695042795.0/15268766246.0
+_DP_A[9][4]  = -309121744.0/1061227803.0
+_DP_A[9][5]  = -12992083.0/490766935.0
+_DP_A[9][6]  =  6005943493.0/2108947869.0
+_DP_A[9][7]  =  393006217.0/1396673457.0
+_DP_A[9][8]  =  123872331.0/1001029789.0
+_DP_A[10][0]  = -1028468189.0/846180014.0
+_DP_A[10][3]  =  8478235783.0/508512852.0
+_DP_A[10][4]  =  1311729495.0/1432422823.0
+_DP_A[10][5]  = -10304129995.0/1701304382.0
+_DP_A[10][6]  = -48777925059.0/3047939560.0
+_DP_A[10][7]  =  15336726248.0/1032824649.0
+_DP_A[10][8]  = -45442868181.0/3398467696.0
+_DP_A[10][9]  =  3065993473.0/597172653.0
+_DP_A[11][0]  =  185892177.0/718116043.0
+_DP_A[11][3]  = -3185094517.0/667107341.0
+_DP_A[11][4]  = -477755414.0/1098053517.0
+_DP_A[11][5]  = -703635378.0/230739211.0
+_DP_A[11][6]  =  5731566787.0/1027545527.0
+_DP_A[11][7]  =  5232866602.0/850066563.0
+_DP_A[11][8]  = -4093664535.0/808688257.0
+_DP_A[11][9]  =  3962137247.0/1805957418.0
+_DP_A[11][10] =  65686358.0/487910083.0
+_DP_A[12][0]  =  403863854.0/491063109.0
+_DP_A[12][3]  = -5765607357.0/1731183897.0
+_DP_A[12][4]  =  1023671723.0/2166884888.0
+_DP_A[12][5]  =  732969965.0/3827304573.0
+_DP_A[12][6]  =  10700094551.0/10440212544.0
+_DP_A[12][7]  = -3745099610.0/3360369832.0
+_DP_A[12][8]  =  3010732700.0/3838820591.0
+_DP_A[12][9]  = -16098663.0/1004006975.0
+_DP_A[12][10] = -1553839.0/1121054474.0
+
+# B8: 8차 주 솔루션 (bhat, Hairer 표기)
+cdef double _DP_B8[13]
+_DP_B8[0]  =  13451932.0/455176623.0
+_DP_B8[1]  =  0.0
+_DP_B8[2]  =  0.0
+_DP_B8[3]  =  0.0
+_DP_B8[4]  =  0.0
+_DP_B8[5]  = -808719846.0/976000145.0
+_DP_B8[6]  =  1757004468.0/5645159321.0
+_DP_B8[7]  =  656045339.0/265891186.0
+_DP_B8[8]  = -3867574721.0/1518517206.0
+_DP_B8[9]  =  465885868.0/322736535.0
+_DP_B8[10] =  53011238.0/667516719.0
+_DP_B8[11] =  2.0/45.0
+_DP_B8[12] =  0.0
+
+# B7: 7차 오차 추정 (b, Hairer 표기)
+cdef double _DP_B7[13]
+_DP_B7[0]  =  14005451.0/335480064.0
+_DP_B7[1]  =  0.0
+_DP_B7[2]  =  0.0
+_DP_B7[3]  =  0.0
+_DP_B7[4]  =  0.0
+_DP_B7[5]  = -59238493.0/1068277825.0
+_DP_B7[6]  =  181606767.0/758867731.0
+_DP_B7[7]  =  561292985.0/797845732.0
+_DP_B7[8]  = -1041891430.0/1371343529.0
+_DP_B7[9]  =  760417239.0/1151165299.0
+_DP_B7[10] =  118820643.0/751138087.0
+_DP_B7[11] = -528747749.0/2220607170.0
+_DP_B7[12] =  1.0/4.0
+
+# ================================================================== Adams 계수
+# Adams-Bashforth: _AB_COEFFS[order][j], order=1..5
+# 출처: Hairer et al., "Solving ODEs I", Table III.1.1
+cdef double _AB_COEFFS[6][5]
+
+_AB_COEFFS[1][0] =  1.0
+_AB_COEFFS[1][1] =  0.0
+_AB_COEFFS[1][2] =  0.0
+_AB_COEFFS[1][3] =  0.0
+_AB_COEFFS[1][4] =  0.0
+
+_AB_COEFFS[2][0] =  1.5               # 3/2
+_AB_COEFFS[2][1] = -0.5               # -1/2
+_AB_COEFFS[2][2] =  0.0
+_AB_COEFFS[2][3] =  0.0
+_AB_COEFFS[2][4] =  0.0
+
+_AB_COEFFS[3][0] =  1.9166666666666667   # 23/12
+_AB_COEFFS[3][1] = -1.3333333333333333   # -16/12
+_AB_COEFFS[3][2] =  0.4166666666666667   #  5/12
+_AB_COEFFS[3][3] =  0.0
+_AB_COEFFS[3][4] =  0.0
+
+_AB_COEFFS[4][0] =  2.2916666666666667   # 55/24
+_AB_COEFFS[4][1] = -2.4583333333333333   # -59/24
+_AB_COEFFS[4][2] =  1.5416666666666667   # 37/24
+_AB_COEFFS[4][3] = -0.375                # -9/24
+_AB_COEFFS[4][4] =  0.0
+
+_AB_COEFFS[5][0] =  2.6402777777777778   # 1901/720
+_AB_COEFFS[5][1] = -3.8527777777777778   # -2774/720
+_AB_COEFFS[5][2] =  3.6333333333333333   # 2616/720
+_AB_COEFFS[5][3] = -1.7694444444444444   # -1274/720
+_AB_COEFFS[5][4] =  0.3486111111111111   # 251/720
+
+# Adams-Moulton: _AM_COEFFS[order][j], order=1..5
+# j=0: implicit (f_{n+1}) 계수
+cdef double _AM_COEFFS[6][5]
+
+_AM_COEFFS[1][0] =  1.0
+_AM_COEFFS[1][1] =  0.0
+_AM_COEFFS[1][2] =  0.0
+_AM_COEFFS[1][3] =  0.0
+_AM_COEFFS[1][4] =  0.0
+
+_AM_COEFFS[2][0] =  0.5               # 1/2
+_AM_COEFFS[2][1] =  0.5               # 1/2
+_AM_COEFFS[2][2] =  0.0
+_AM_COEFFS[2][3] =  0.0
+_AM_COEFFS[2][4] =  0.0
+
+_AM_COEFFS[3][0] =  0.4166666666666667   #  5/12
+_AM_COEFFS[3][1] =  0.6666666666666667   #  8/12
+_AM_COEFFS[3][2] = -0.0833333333333333   # -1/12
+_AM_COEFFS[3][3] =  0.0
+_AM_COEFFS[3][4] =  0.0
+
+_AM_COEFFS[4][0] =  0.375                #  9/24
+_AM_COEFFS[4][1] =  0.7916666666666667   # 19/24
+_AM_COEFFS[4][2] = -0.2083333333333333   # -5/24
+_AM_COEFFS[4][3] =  0.0416666666666667   #  1/24
+_AM_COEFFS[4][4] =  0.0
+
+_AM_COEFFS[5][0] =  0.3486111111111111   # 251/720
+_AM_COEFFS[5][1] =  0.8972222222222222   # 646/720
+_AM_COEFFS[5][2] = -0.3666666666666667   # -264/720
+_AM_COEFFS[5][3] =  0.1472222222222222   # 106/720
+_AM_COEFFS[5][4] = -0.0263888888888889   # -19/720
 
 
 # ================================================================== 헬퍼 함수
@@ -1268,3 +1809,516 @@ cdef class NumericalAnalysis:
         if return_trajectory:
             return traj
         return y
+
+    # ------------------------------------------------------------------ 16. gauss_legendre
+
+    def gauss_legendre(self, f, double a, double b, int n=5, *,
+                       str var='t', bint return_error=False):
+        """
+        n-point Gauss-Legendre 구적법.
+
+        ∫_a^b f(x) dx ≈ (b-a)/2 · Σ_{i=0}^{n-1} w_i · f(x_i)
+
+        구간 변환: x = (b-a)/2·u + (a+b)/2, u ∈ [-1, 1]
+        (2n-1)차 다항식까지 정확 (n point GL은 2n-1차 다항식에 대해 정확).
+
+        Parameters
+        ----------
+        f            : callable 또는 PyExpr
+        a, b         : float  적분 구간 (a < b)
+        n            : int    적분점 수 (2 <= n <= 16, 기본 5)
+        var          : str    PyExpr용 변수명 (기본 't')
+        return_error : bool   True이면 (value, error_estimate) 반환.
+
+        Returns
+        -------
+        float 또는 (float, float)
+
+        Raises
+        ------
+        ValueError  a >= b, n < 2, n > 16
+        TypeError   f가 callable이 아닌 경우
+        """
+        if a >= b:
+            raise ValueError(f"a must be less than b, got a={a}, b={b}")
+        if n < 2 or n > 16:
+            raise ValueError(
+                f"gauss_legendre supports n in [2, 16], got n={n}"
+            )
+
+        cdef object _f = _resolve_callable(f, var)
+        cdef double half = 0.5 * (b - a)
+        cdef double mid  = 0.5 * (a + b)
+        cdef double s = 0.0, sc = 0.0
+        cdef int i, offset = _GL_OFFSETS[n]
+
+        for i in range(n):
+            kahan_add(&s, &sc, _GL_WEIGHTS_FLAT[offset + i] * <double>_f(mid + half * _GL_NODES_FLAT[offset + i]))
+
+        cdef double result = half * s
+        cdef double s2 = 0.0, sc2 = 0.0, result2, err
+        cdef int offset2, n2
+
+        if return_error:
+            n2 = n - 1 if n > 2 else 2
+            offset2 = _GL_OFFSETS[n2]
+            for i in range(n2):
+                kahan_add(&s2, &sc2, _GL_WEIGHTS_FLAT[offset2 + i] * <double>_f(mid + half * _GL_NODES_FLAT[offset2 + i]))
+            result2 = half * s2
+            err = fabs(result - result2) / 100.0 if n > 2 else 0.0
+            return (result, err)
+        return result
+
+    # ------------------------------------------------------------------ 17. composite_gauss_legendre
+
+    def composite_gauss_legendre(self, f, double a, double b, int m, int n=5, *,
+                                  str var='t', bint return_error=False):
+        """
+        합성 Gauss-Legendre 적분.
+
+        [a, b]를 m개 구간으로 균등 분할, 각 구간에 n-point GL 적용.
+
+        Parameters
+        ----------
+        f            : callable 또는 PyExpr
+        a, b         : float  적분 구간 (a < b)
+        m            : int    구간 분할 수 (>= 1)
+        n            : int    각 구간 적분점 수 (2 <= n <= 16, 기본 5)
+        var          : str    PyExpr용 변수명
+        return_error : bool   True이면 (value, error_estimate) 반환.
+
+        Returns
+        -------
+        float 또는 (float, float)
+
+        Raises
+        ------
+        ValueError  a >= b, m < 1, n 범위 위반
+        TypeError   f가 callable이 아닌 경우
+        """
+        if a >= b:
+            raise ValueError(f"a must be less than b, got a={a}, b={b}")
+        if m < 1:
+            raise ValueError(f"composite_gauss_legendre requires m >= 1, got m={m}")
+        if n < 2 or n > 16:
+            raise ValueError(
+                f"gauss_legendre supports n in [2, 16], got n={n}"
+            )
+
+        cdef object _f = _resolve_callable(f, var)
+        cdef double h = (b - a) / m
+        cdef double total = 0.0, tc = 0.0
+        cdef double sub_a, sub_b, half_sub, mid_sub, s, sc
+        cdef int i, j, offset = _GL_OFFSETS[n]
+
+        for i in range(m):
+            sub_a    = a + i * h
+            sub_b    = sub_a + h
+            half_sub = 0.5 * h
+            mid_sub  = 0.5 * (sub_a + sub_b)
+            s = 0.0; sc = 0.0
+            for j in range(n):
+                kahan_add(&s, &sc, _GL_WEIGHTS_FLAT[offset + j] * <double>_f(mid_sub + half_sub * _GL_NODES_FLAT[offset + j]))
+            kahan_add(&total, &tc, half_sub * s)
+
+        cdef double total2 = 0.0, tc2 = 0.0, h2, err_cgl
+        cdef int m2, i2, j2
+
+        if return_error:
+            if m >= 2:
+                m2 = m // 2
+                h2 = (b - a) / m2
+                for i2 in range(m2):
+                    sub_a    = a + i2 * h2
+                    sub_b    = sub_a + h2
+                    half_sub = 0.5 * h2
+                    mid_sub  = 0.5 * (sub_a + sub_b)
+                    s = 0.0; sc = 0.0
+                    for j2 in range(n):
+                        kahan_add(&s, &sc, _GL_WEIGHTS_FLAT[offset + j2] * <double>_f(mid_sub + half_sub * _GL_NODES_FLAT[offset + j2]))
+                    kahan_add(&total2, &tc2, half_sub * s)
+                err_cgl = fabs(total - total2) / 100.0
+            else:
+                err_cgl = 0.0
+            return (total, err_cgl)
+        return total
+
+    # ------------------------------------------------------------------ 18. rk78 (Dormand-Prince 8(7))
+
+    def rk78(self, f, double t0, double y0, double t_end, *,
+             double tol=1e-12, h_init=None, double h_min=1e-14,
+             vars=('t', 'y'), bint return_trajectory=False, int max_steps=10000):
+        """
+        Dormand-Prince 8(7) 적응형 ODE 적분 (13-stage, FSAL).
+
+        8차 해와 7차 해의 차이로 오차 추정, step 크기 자동 조정.
+
+        출처: Hairer, Nørsett, Wanner, "Solving ODEs I", 2nd Ed. 1993,
+              Table II.5.4 (Dormand-Prince, 1980).
+
+        Parameters
+        ----------
+        f                : callable f(t, y) 또는 PyExpr
+        t0               : float  초기 시간
+        y0               : float  초기 상태
+        t_end            : float  종료 시간 (> t0)
+        tol              : float  허용 오차 (기본 1e-12)
+        h_init           : float 또는 None. None이면 (t_end-t0)/100
+        h_min            : float  최소 step 크기 (기본 1e-14)
+        vars             : tuple  PyExpr 변수명
+        return_trajectory: bool   True이면 [(t,y), ...] 궤적 반환
+        max_steps        : int    최대 step 수 (기본 10000)
+
+        Returns
+        -------
+        float 또는 list of (float, float)
+
+        Raises
+        ------
+        ValueError   t0 >= t_end
+        RuntimeError max_steps 초과, h underflow
+        """
+        if t0 >= t_end:
+            raise ValueError(f"t0 must be less than t_end, got t0={t0}, t_end={t_end}")
+
+        cdef object _f = _resolve_callable_2var(f, vars[0], vars[1])
+
+        cdef double h = (t_end - t0) / 100.0 if h_init is None else <double>h_init
+        cdef double t = t0
+        cdef double y = y0
+        cdef double k[13]
+        cdef double y_sum, y8, y7, err_est, h_new
+        cdef int step_count = 0
+        cdef int si, sj
+        cdef list traj_78
+
+        if return_trajectory:
+            traj_78 = [(t, y)]
+
+        # FSAL: k[0] 초기화
+        k[0] = <double>_f(t, y)
+
+        while t < t_end:
+            if step_count >= max_steps:
+                raise RuntimeError(
+                    f"rk78 exceeded max_steps={max_steps} at t={t:.6g}"
+                )
+            step_count += 1
+
+            if t + h > t_end:
+                h = t_end - t
+
+            # k[1] ~ k[11] 계산
+            for si in range(1, 12):
+                y_sum = y
+                for sj in range(si):
+                    y_sum = y_sum + h * _DP_A[si][sj] * k[sj]
+                k[si] = <double>_f(t + _DP_C[si] * h, y_sum)
+
+            # 8차 해
+            y8 = y
+            for si in range(12):
+                y8 = y8 + h * _DP_B8[si] * k[si]
+
+            # k[12] (FSAL 후보)
+            k[12] = <double>_f(t + h, y8)
+
+            # 7차 해
+            y7 = y
+            for si in range(13):
+                y7 = y7 + h * _DP_B7[si] * k[si]
+
+            err_est = fabs(y8 - y7)
+
+            if err_est < tol or h <= h_min:
+                t = t + h
+                y = y8
+                k[0] = k[12]  # FSAL
+                if return_trajectory:
+                    traj_78.append((t, y))
+
+            if err_est > 0.0:
+                h_new = h * 0.9 * (tol / err_est) ** 0.125
+                if h_new > 5.0 * h:
+                    h_new = 5.0 * h
+                if h_new < 0.1 * h:
+                    h_new = 0.1 * h
+                h = h_new
+
+            if h < h_min and t < t_end:
+                raise RuntimeError(
+                    f"rk78: step size h={h:.2e} underflow at t={t:.6g}"
+                )
+
+        if return_trajectory:
+            return traj_78
+        return y
+
+    # ------------------------------------------------------------------ 19. adams_bashforth
+
+    def adams_bashforth(self, f, double t0, double y0, double t_end, int n, *,
+                        int order=4, vars=('t', 'y'), bint return_trajectory=False):
+        """
+        Adams-Bashforth explicit multistep ODE 적분.
+
+        y_{i+1} = y_i + h · Σ_{j=0}^{k-1} coeffs[j] · f_{i-j}
+
+        부트스트랩: 첫 (order-1) step은 RK4로 계산.
+
+        Parameters
+        ----------
+        f                : callable f(t, y) 또는 PyExpr
+        t0               : float  초기 시간
+        y0               : float  초기 상태
+        t_end            : float  종료 시간 (> t0)
+        n                : int    전체 step 수 (>= order)
+        order            : int    방법의 차수 (1 <= order <= 5, 기본 4)
+        vars             : tuple  PyExpr 변수명
+        return_trajectory: bool
+
+        Returns
+        -------
+        float 또는 list of (float, float)
+
+        Raises
+        ------
+        ValueError   order < 1, order > 5, n < order, t0 >= t_end
+        """
+        if t0 >= t_end:
+            raise ValueError(f"t0 must be less than t_end, got t0={t0}, t_end={t_end}")
+        if order < 1 or order > 5:
+            raise ValueError(f"adams_bashforth supports order in [1, 5], got order={order}")
+        if n < order:
+            raise ValueError(f"adams_bashforth requires n >= order={order}, got n={n}")
+
+        cdef object _f = _resolve_callable_2var(f, vars[0], vars[1])
+        cdef double h = (t_end - t0) / n
+        cdef double y_next_ab, dy_ab, t_next_ab
+        cdef int i_ab, j_ab
+        cdef list y_hist_ab = [y0]
+        cdef list f_hist_ab = [<double>_f(t0, y0)]
+        cdef list traj_ab
+
+        if return_trajectory:
+            traj_ab = [(t0, y0)]
+
+        for i_ab in range(order - 1):
+            t_cur = t0 + i_ab * h
+            y_cur = y_hist_ab[i_ab]
+            y_next_ab = _rk4_step(_f, t_cur, y_cur, h)
+            t_next_ab = t_cur + h
+            y_hist_ab.append(y_next_ab)
+            f_hist_ab.append(<double>_f(t_next_ab, y_next_ab))
+            if return_trajectory:
+                traj_ab.append((t_next_ab, y_next_ab))
+
+        for i_ab in range(order - 1, n):
+            y_cur = y_hist_ab[i_ab]
+            dy_ab = 0.0
+            for j_ab in range(order):
+                dy_ab = dy_ab + _AB_COEFFS[order][j_ab] * f_hist_ab[i_ab - j_ab]
+            y_next_ab = y_cur + h * dy_ab
+            t_next_ab = t0 + (i_ab + 1) * h
+            y_hist_ab.append(y_next_ab)
+            f_hist_ab.append(<double>_f(t_next_ab, y_next_ab))
+            if return_trajectory:
+                traj_ab.append((t_next_ab, y_next_ab))
+
+        if return_trajectory:
+            return traj_ab
+        return y_hist_ab[n]
+
+    # ------------------------------------------------------------------ 20. adams_moulton
+
+    def adams_moulton(self, f, double t0, double y0, double t_end, int n, *,
+                      int order=4, vars=('t', 'y'), bint return_trajectory=False,
+                      int max_iter=50, double tol=1e-12):
+        """
+        Adams-Moulton implicit multistep ODE 적분.
+
+        y_{i+1} = y_i + h · [c_0·f(t_{i+1}, y_{i+1}) + c_1·f_i + ...]
+        Predictor: Adams-Bashforth (동일 order)
+        Corrector: fixed-point iteration
+
+        Parameters
+        ----------
+        f                : callable f(t, y) 또는 PyExpr
+        t0               : float  초기 시간
+        y0               : float  초기 상태
+        t_end            : float  종료 시간 (> t0)
+        n                : int    전체 step 수 (>= order)
+        order            : int    방법의 차수 (1 <= order <= 5, 기본 4)
+        vars             : tuple  PyExpr 변수명
+        return_trajectory: bool
+        max_iter         : int    fixed-point 최대 반복 (기본 50)
+        tol              : float  fixed-point 수렴 허용 오차 (기본 1e-12)
+
+        Returns
+        -------
+        float 또는 list of (float, float)
+
+        Raises
+        ------
+        ValueError   order < 1, order > 5, n < order, t0 >= t_end
+        RuntimeError fixed-point 미수렴
+        """
+        if t0 >= t_end:
+            raise ValueError(f"t0 must be less than t_end, got t0={t0}, t_end={t_end}")
+        if order < 1 or order > 5:
+            raise ValueError(f"adams_moulton supports order in [1, 5], got order={order}")
+        if n < order:
+            raise ValueError(f"adams_moulton requires n >= order={order}, got n={n}")
+
+        cdef object _f = _resolve_callable_2var(f, vars[0], vars[1])
+        cdef double h = (t_end - t0) / n
+        cdef double y_next_am, y_pred_am, y_curr_am, f_new_am, expl_sum_am
+        cdef double t_next_am
+        cdef int i_am, j_am, it_am
+        cdef list y_hist_am = [y0]
+        cdef list f_hist_am = [<double>_f(t0, y0)]
+        cdef list traj_am
+
+        if return_trajectory:
+            traj_am = [(t0, y0)]
+
+        for i_am in range(order - 1):
+            t_cur = t0 + i_am * h
+            y_cur = y_hist_am[i_am]
+            y_next_am = _rk4_step(_f, t_cur, y_cur, h)
+            t_next_am = t_cur + h
+            y_hist_am.append(y_next_am)
+            f_hist_am.append(<double>_f(t_next_am, y_next_am))
+            if return_trajectory:
+                traj_am.append((t_next_am, y_next_am))
+
+        for i_am in range(order - 1, n):
+            t_next_am = t0 + (i_am + 1) * h
+            y_cur = y_hist_am[i_am]
+
+            # Predictor (AB)
+            y_pred_am = y_cur
+            for j_am in range(order):
+                y_pred_am = y_pred_am + h * _AB_COEFFS[order][j_am] * f_hist_am[i_am - j_am]
+
+            # explicit 부분: c_1*f_i + c_2*f_{i-1} + ...
+            expl_sum_am = 0.0
+            for j_am in range(1, order):
+                expl_sum_am = expl_sum_am + _AM_COEFFS[order][j_am] * f_hist_am[i_am - (j_am - 1)]
+
+            # Corrector: fixed-point
+            y_curr_am = y_pred_am
+            for it_am in range(max_iter):
+                f_new_am = <double>_f(t_next_am, y_curr_am)
+                y_next_am = y_cur + h * (_AM_COEFFS[order][0] * f_new_am + expl_sum_am)
+                if fabs(y_next_am - y_curr_am) < tol:
+                    y_curr_am = y_next_am
+                    break
+                y_curr_am = y_next_am
+            else:
+                raise RuntimeError(
+                    f"adams_moulton did not converge at t={t_next_am:.6g} "
+                    f"(max_iter={max_iter}, |delta|={fabs(y_next_am - y_curr_am):.2e})"
+                )
+
+            y_hist_am.append(y_curr_am)
+            f_hist_am.append(<double>_f(t_next_am, y_curr_am))
+            if return_trajectory:
+                traj_am.append((t_next_am, y_curr_am))
+
+        if return_trajectory:
+            return traj_am
+        return y_hist_am[n]
+
+    # ------------------------------------------------------------------ 21. predictor_corrector (PECE)
+
+    def predictor_corrector(self, f, double t0, double y0, double t_end, int n, *,
+                            int order=4, vars=('t', 'y'), bint return_trajectory=False):
+        """
+        PECE Adams Predictor-Corrector ODE 적분.
+
+        각 step에서 PECE 1회 수행:
+          P: Adams-Bashforth (order k) → y_p
+          E: f_p = f(t_{i+1}, y_p)
+          C: Adams-Moulton (order k, 1회) → y_c
+          E: f_c = f(t_{i+1}, y_c)
+
+        부트스트랩: 첫 (order-1) step은 RK4.
+
+        Parameters
+        ----------
+        f                : callable f(t, y) 또는 PyExpr
+        t0               : float  초기 시간
+        y0               : float  초기 상태
+        t_end            : float  종료 시간 (> t0)
+        n                : int    전체 step 수 (>= order)
+        order            : int    방법의 차수 (2 <= order <= 5, 기본 4)
+        vars             : tuple  PyExpr 변수명
+        return_trajectory: bool
+
+        Returns
+        -------
+        float 또는 list of (float, float)
+
+        Raises
+        ------
+        ValueError   order < 2, order > 5, n < order, t0 >= t_end
+        """
+        if t0 >= t_end:
+            raise ValueError(f"t0 must be less than t_end, got t0={t0}, t_end={t_end}")
+        if order < 2 or order > 5:
+            raise ValueError(f"predictor_corrector supports order in [2, 5], got order={order}")
+        if n < order:
+            raise ValueError(f"predictor_corrector requires n >= order={order}, got n={n}")
+
+        cdef object _f = _resolve_callable_2var(f, vars[0], vars[1])
+        cdef double h = (t_end - t0) / n
+        cdef double y_p_pc, f_p_pc, y_c_pc, f_c_pc, expl_sum_pc
+        cdef double t_next_pc, t_cur_pc
+        cdef int i_pc, j_pc
+        cdef list y_hist_pc = [y0]
+        cdef list f_hist_pc = [<double>_f(t0, y0)]
+        cdef list traj_pc
+
+        if return_trajectory:
+            traj_pc = [(t0, y0)]
+
+        for i_pc in range(order - 1):
+            t_cur_pc = t0 + i_pc * h
+            y_bs = y_hist_pc[i_pc]
+            y_bs_next = _rk4_step(_f, t_cur_pc, y_bs, h)
+            t_bs_next = t_cur_pc + h
+            y_hist_pc.append(y_bs_next)
+            f_hist_pc.append(<double>_f(t_bs_next, y_bs_next))
+            if return_trajectory:
+                traj_pc.append((t_bs_next, y_bs_next))
+
+        for i_pc in range(order - 1, n):
+            t_cur_pc = t0 + i_pc * h
+            t_next_pc = t_cur_pc + h
+            y_cur_pc = y_hist_pc[i_pc]
+
+            # P: Predict (Adams-Bashforth)
+            y_p_pc = y_cur_pc
+            for j_pc in range(order):
+                y_p_pc = y_p_pc + h * _AB_COEFFS[order][j_pc] * f_hist_pc[i_pc - j_pc]
+
+            # E: Evaluate predictor
+            f_p_pc = <double>_f(t_next_pc, y_p_pc)
+
+            # C: Correct (Adams-Moulton, 1회)
+            expl_sum_pc = 0.0
+            for j_pc in range(1, order):
+                expl_sum_pc = expl_sum_pc + _AM_COEFFS[order][j_pc] * f_hist_pc[i_pc - (j_pc - 1)]
+            y_c_pc = y_cur_pc + h * (_AM_COEFFS[order][0] * f_p_pc + expl_sum_pc)
+
+            # E: Evaluate corrected
+            f_c_pc = <double>_f(t_next_pc, y_c_pc)
+
+            y_hist_pc.append(y_c_pc)
+            f_hist_pc.append(f_c_pc)
+            if return_trajectory:
+                traj_pc.append((t_next_pc, y_c_pc))
+
+        if return_trajectory:
+            return traj_pc
+        return y_hist_pc[n]
