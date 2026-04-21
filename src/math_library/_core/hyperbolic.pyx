@@ -13,6 +13,7 @@
 # 참조: algorithm_reference.md 섹션 7~9
 
 from libc.stdint cimport uint32_t
+from libc.math cimport INFINITY
 from ._helpers cimport high_word, low_word
 from .exponential cimport _exp_inline, _expm1_inline
 
@@ -293,7 +294,7 @@ cdef double complex _hypertan_complex(double complex z) noexcept nogil:
 
     denom = cosh2a + cos2b
     if denom == 0.0:
-        return _make_complex(1.0/0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
 
     return _make_complex(sinh2a / denom, sin2b / denom)
 
@@ -303,7 +304,7 @@ cdef double complex _hypersec_complex(double complex z) noexcept nogil:
     cdef double complex c = _hypercos_complex(z)
     cdef double denom = c.real*c.real + c.imag*c.imag
     if denom == 0.0:
-        return _make_complex(1.0/0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
     return _make_complex(c.real / denom, -c.imag / denom)
 
 
@@ -312,7 +313,7 @@ cdef double complex _hypercosec_complex(double complex z) noexcept nogil:
     cdef double complex s = _hypersin_complex(z)
     cdef double denom = s.real*s.real + s.imag*s.imag
     if denom == 0.0:
-        return _make_complex(1.0/0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
     return _make_complex(s.real / denom, -s.imag / denom)
 
 
@@ -322,7 +323,7 @@ cdef double complex _hypercotan_complex(double complex z) noexcept nogil:
     cdef double complex c = _hypercos_complex(z)
     cdef double denom = s.real*s.real + s.imag*s.imag
     if denom == 0.0:
-        return _make_complex(1.0/0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
     return _make_complex(
         (c.real*s.real + c.imag*s.imag) / denom,
         (c.imag*s.real - c.real*s.imag) / denom

@@ -11,7 +11,7 @@
 # erf, erfc: musl erf.c (4단계 다항식 근사)
 # lgamma: Stirling 기반 Lanczos 직접 구현
 
-from libc.math cimport fabs, exp as _lexp, log as _llog, sin as _lsin, erf as _lerf, erfc as _lerfc
+from libc.math cimport fabs, exp as _lexp, log as _llog, sin as _lsin, erf as _lerf, erfc as _lerfc, INFINITY
 from ._helpers cimport high_word, double_to_bits, bits_to_double
 from libc.stdint cimport uint32_t, uint64_t
 
@@ -164,7 +164,7 @@ cpdef double lgamma(double x) noexcept:
     # 음수 및 0 처리
     if x <= 0.0:
         if x == <double>(<int>x):
-            return 1.0 / 0.0  # 정수 음수 혹은 0: +inf
+            return INFINITY  # 정수 음수 혹은 0: +inf
         # 반사 공식: lgamma(x) = ln(π/|sin(πx)|) - lgamma(1-x)
         ax = fabs(x)
         t  = _lgamma_pos(1.0 - x)

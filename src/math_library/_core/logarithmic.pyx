@@ -11,7 +11,7 @@
 #
 # 참조: algorithm_reference.md 섹션 11
 
-from libc.math cimport fma, fabs, log1p as _log1p
+from libc.math cimport fma, fabs, log1p as _log1p, INFINITY
 from libc.stdint cimport int32_t, uint32_t, int64_t, uint64_t
 from ._helpers cimport high_word, low_word, double_to_bits, bits_to_double, _atan2_real, _hypot_real, _make_complex
 
@@ -20,6 +20,20 @@ cdef extern from *:
     """
 #include <stdint.h>
 #include <string.h>
+#include <math.h>
+
+/* MSVC는 GCC 내장 함수(__builtin_*)를 지원하지 않으므로 표준 함수로 매핑 */
+#ifdef _MSC_VER
+#ifndef __builtin_scalbn
+#define __builtin_scalbn scalbn
+#endif
+#ifndef __builtin_fma
+#define __builtin_fma fma
+#endif
+#ifndef __builtin_memcpy
+#define __builtin_memcpy memcpy
+#endif
+#endif
 
 #define LOG_TABLE_BITS 7
 #define LOG_N 128
@@ -336,7 +350,7 @@ cdef double complex _log_complex(double complex base, double complex x) noexcept
     cdef double complex ln_base = _ln_complex(base)
     cdef double denom = ln_base.real * ln_base.real + ln_base.imag * ln_base.imag
     if denom == 0.0:
-        return _make_complex(1.0 / 0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
     return _make_complex(
         (ln_x.real * ln_base.real + ln_x.imag * ln_base.imag) / denom,
         (ln_x.imag * ln_base.real - ln_x.real * ln_base.imag) / denom

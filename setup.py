@@ -4,24 +4,47 @@ MinGW-w64 UCRT64 (gcc 15.2.0) 및 MSVC 자동 감지
 """
 import sys
 import os
+
+# ------------------------------------------------------------------ VS 2026 Preview 보조
+# VS 2026 Preview의 vcvarsall.bat은 내부에서 vswhere.exe를 PATH 기반으로 호출한다.
+# 시스템 PATH에 Installer 폴더가 없으면 env dump가 실패하고 setuptools는
+# "Unable to find a compatible Visual Studio installation" 에러를 낸다.
+# 따라서 Windows에서 해당 경로가 누락된 경우 PATH 앞에 삽입한다(프로세스 한정).
+if sys.platform == "win32":
+    _vs_installer = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer"
+    if os.path.isfile(os.path.join(_vs_installer, "vswhere.exe")):
+        _path = os.environ.get("PATH", "")
+        if _vs_installer.lower() not in _path.lower():
+            os.environ["PATH"] = _vs_installer + os.pathsep + _path
+
 import numpy as np
 from setuptools import setup, Extension
 from Cython.Build import cythonize
 
 # ------------------------------------------------------------------ 컴파일러 감지
 def is_mingw():
-    """MinGW/GCC 컴파일러 사용 여부 감지 (m5: 보강된 감지 로직)"""
-    cc = os.environ.get("CC", "").lower()
-    # --compiler=mingw32 또는 --compiler mingw32 인자 감지
+    """MinGW/GCC 컴파일러 사용 여부 감지 (m5: 보강된 감지 로직)
+
+    우선순위: 명시적 --compiler 인자 > CC 환경변수 > PATH 스니핑.
+    --compiler=msvc가 명시되면 PATH에 mingw가 있어도 MSVC로 간주.
+    """
+    # 1) 명시적 --compiler 인자를 최우선 처리
     for arg in sys.argv:
-        if "mingw32" in arg.lower() or "mingw64" in arg.lower():
+        a = arg.lower()
+        if a in ("--compiler=msvc", "--compiler=clang", "--compiler=bcpp",
+                "--compiler=unix", "--compiler=cygwin"):
+            return False
+        if a in ("--compiler=mingw32", "--compiler=mingw64"):
             return True
-        if arg.lower() in ("--compiler=mingw32", "--compiler=mingw64"):
+        if "mingw32" in a or "mingw64" in a:
             return True
-    # CC 환경변수 감지
+    # 2) CC 환경변수 감지
+    cc = os.environ.get("CC", "").lower()
+    if cc in ("cl", "cl.exe", "msvc"):
+        return False
     if "gcc" in cc or "mingw" in cc:
         return True
-    # MSYS2/UCRT64 환경 감지
+    # 3) MSYS2/UCRT64 환경 감지 (fallback)
     path_env = os.environ.get("PATH", "")
     if "msys64" in path_env.lower() or "mingw" in path_env.lower():
         return True
@@ -30,8 +53,10 @@ def is_mingw():
 _USE_MINGW = is_mingw()
 
 if _USE_MINGW:
-    # MinGW-w64 GCC 15.2.0 최적화 플래그
+    # MinGW-w64 GCC 15.2.0 최적화 플래그 (C++17로 통일: Cython 3.x의 C 모드가
+    # MSVC와 호환되지 않는 GCC 확장 __complex__를 생성하므로 C++17로 일관)
     compile_args = [
+        "-std=c++17",
         "-O3",
         "-march=native",
         "-mfma",
@@ -40,8 +65,6 @@ if _USE_MINGW:
         # IEEE 754 준수: -ffast-math 금지
     ]
     # MinGW 런타임 DLL 의존성 제거: 정적 링킹
-    # -Wl,-Bstatic: 이후 라이브러리를 정적으로 링킹
-    # -lgcc -lgcc_s: gcc 런타임을 명시적으로 정적으로 포함
     link_args = [
         "-static-libgcc",
         "-static-libstdc++",
@@ -51,10 +74,12 @@ if _USE_MINGW:
     ] if sys.platform == "win32" else []
     define_macros = [("MS_WIN64", None)] if sys.platform == "win32" else []
 else:
-    # MSVC
-    compile_args = ["/O2", "/fp:fast", "/arch:AVX2"]
+    # MSVC — C++17 모드 통일
+    compile_args = ["/std:c++17", "/O2", "/fp:fast", "/arch:AVX2", "/EHsc"]
     link_args = []
-    define_macros = []
+    # CYTHON_CCOMPLEX=0 : Cython이 C99 _Complex / GCC __real__ 확장 대신
+    #                     자체 struct 기반 complex를 사용하도록 강제 (MSVC 호환)
+    define_macros = [("CYTHON_CCOMPLEX", "0")]
 
 # Linux: math 라이브러리 명시 링킹
 libraries = ["m"] if sys.platform != "win32" else []
@@ -71,6 +96,8 @@ COMPILER_DIRECTIVES = {
 }
 
 def make_ext(name, sources, **kwargs):
+    # language="c++"로 통일 — Cython 3.x의 C 모드 __complex__ (GCC 확장) 회피
+    kwargs.setdefault("language", "c++")
     return Extension(
         name=name,
         sources=sources,

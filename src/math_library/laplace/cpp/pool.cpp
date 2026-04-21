@@ -1,4 +1,5 @@
 #include "pool.hpp"
+#include "int128_shim.hpp"  // MSVC: ml_int128 → ml_laplace::Int128 alias (GCC/Clang은 no-op)
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -157,12 +158,12 @@ bool ExprPool::both_numeric(ExprPtr a, ExprPtr b,
 // 두 Rational의 합 계산 (overflow 체크 포함)
 ExprPtr ExprPool::add_rationals(const Rational* a, const Rational* b) {
     // a.num/a.den + b.num/b.den = (a.num*b.den + b.num*a.den) / (a.den*b.den)
-    // overflow 방지: __int128 사용
-    __int128 num = (__int128)a->num() * b->den() + (__int128)b->num() * a->den();
-    __int128 den = (__int128)a->den() * b->den();
+    // overflow 방지: ml_int128 사용
+    ml_int128 num = (ml_int128)a->num() * b->den() + (ml_int128)b->num() * a->den();
+    ml_int128 den = (ml_int128)a->den() * b->den();
     // int64 범위 벗어나면 Const(double)로 폴백
-    constexpr __int128 MAX64 = (__int128)std::numeric_limits<int64_t>::max();
-    constexpr __int128 MIN64 = (__int128)std::numeric_limits<int64_t>::min();
+    constexpr ml_int128 MAX64 = (ml_int128)std::numeric_limits<int64_t>::max();
+    constexpr ml_int128 MIN64 = (ml_int128)std::numeric_limits<int64_t>::min();
     if (num > MAX64 || num < MIN64 || den > MAX64 || den < MIN64) {
         return make_const(a->as_double() + b->as_double());
     }
@@ -279,10 +280,10 @@ ExprPtr ExprPool::normalize_mul(std::vector<ExprPtr>&& raw) {
             } else if (const_acc->type() == NodeType::RATIONAL) {
                 // 두 Rational 곱: (a/b)*(c/d) = (a*c)/(b*d)
                 const Rational* ra = static_cast<const Rational*>(const_acc);
-                __int128 n = (__int128)ra->num() * rp->num();
-                __int128 d = (__int128)ra->den() * rp->den();
-                constexpr __int128 MAX64 = (__int128)std::numeric_limits<int64_t>::max();
-                constexpr __int128 MIN64 = (__int128)std::numeric_limits<int64_t>::min();
+                ml_int128 n = (ml_int128)ra->num() * rp->num();
+                ml_int128 d = (ml_int128)ra->den() * rp->den();
+                constexpr ml_int128 MAX64 = (ml_int128)std::numeric_limits<int64_t>::max();
+                constexpr ml_int128 MIN64 = (ml_int128)std::numeric_limits<int64_t>::min();
                 if (n > MAX64 || n < MIN64 || d > MAX64 || d < MIN64)
                     const_acc = make_const(ra->as_double() * rp->as_double());
                 else
@@ -400,23 +401,23 @@ ExprPtr ExprPool::normalize_pow(ExprPtr base, ExprPtr exp_node) {
                 long long n = static_cast<long long>(ve);
                 if (n >= 0 && n <= 20) {
                     // 양의 정수 지수: num^n / den^n
-                    __int128 rn = 1, rd = 1;
+                    ml_int128 rn = 1, rd = 1;
                     for (long long i = 0; i < n; ++i) {
                         rn *= rb->num();
                         rd *= rb->den();
                     }
-                    constexpr __int128 MAX64 = (__int128)std::numeric_limits<int64_t>::max();
+                    constexpr ml_int128 MAX64 = (ml_int128)std::numeric_limits<int64_t>::max();
                     if (rn <= MAX64 && rd <= MAX64 && rn >= -MAX64)
                         return make_rational((int64_t)rn, (int64_t)rd);
                 } else if (n < 0 && n >= -20) {
                     // 음의 정수 지수: den^|n| / num^|n|
                     long long absn = -n;
-                    __int128 rn = 1, rd = 1;
+                    ml_int128 rn = 1, rd = 1;
                     for (long long i = 0; i < absn; ++i) {
                         rn *= rb->den();
                         rd *= rb->num();
                     }
-                    constexpr __int128 MAX64 = (__int128)std::numeric_limits<int64_t>::max();
+                    constexpr ml_int128 MAX64 = (ml_int128)std::numeric_limits<int64_t>::max();
                     if (rn <= MAX64 && rd <= MAX64 && rd != 0 && rn >= -MAX64)
                         return make_rational((int64_t)rn, (int64_t)rd);
                 }

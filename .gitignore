@@ -17,8 +17,17 @@ venv/
 env/
 
 # IDE / OS
-.vscode/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea/
+.vs/*
+!.vs/tasks.vs.json
+!.vs/launch.vs.json
+*.slnx.user
+*.suo
 .DS_Store
 Thumbs.db
 
@@ -26,11 +35,13 @@ Thumbs.db
 *.pyd
 *.so
 *.c
+*.cpp
 *.html
 build/
 
-# Cython이 .pyx에서 생성한 .cpp (수동 작성 cpp/ 디렉토리는 제외)
-src/math_library/laplace/*.cpp
+# 수동 작성 C++ 소스 (laplace/cpp/)와 MSVC 호환 shim은 추적
+!src/math_library/laplace/cpp/*.cpp
+!src/math_library/laplace/cpp/*.hpp
 
 # C/C++ 런타임 DLL (시스템에서 제공)
 *.dll

@@ -1,0 +1,33 @@
+{
+  "python.analysis.extraPaths": [ "src" ],
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [ "tests" ],
+  "python.terminal.activateEnvInCurrentTerminal": true,
+  "terminal.integrated.env.windows": {
+    "PYTHONPATH": "${workspaceFolder}\\src"
+  },
+  "files.associations": {
+    "*.pyx": "cython",
+    "*.pxd": "cython",
+    "*.pxi": "cython"
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "build/": true,
+    "dist/": true,
+    "*.egg-info/": true
+  },
+  "C_Cpp.default.cppStandard": "c++17",
+  "C_Cpp.default.includePath": [
+    "${workspaceFolder}/src/math_library/laplace/cpp",
+    "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/include",
+    "C:/Program Files (x86)/Windows Kits/10/Include/**"
+  ],
+  "C_Cpp.default.defines": [
+    "_MSC_VER",
+    "MS_WIN64",
+    "SIZEOF_VOID_P=8"
+  ]
+}

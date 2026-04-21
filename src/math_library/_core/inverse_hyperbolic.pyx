@@ -12,7 +12,7 @@
 # arc_hypersec, arc_hypercosec, arc_hypercotan
 # 복소수 자체 구현, 자동 승격 포함
 
-from libc.math cimport fabs, log1p as _log1p_c
+from libc.math cimport fabs, log1p as _log1p_c, INFINITY, NAN
 from libc.stdint cimport uint32_t
 from ._helpers cimport double_to_bits, high_word, _make_complex
 from .exponential cimport _expm1_inline, _exp_inline
@@ -21,8 +21,8 @@ from .power_sqrt cimport _sqrt_c, _sqrt_complex
 
 # ------------------------------------------------------------------ 상수
 cdef double _LN2   = 6.93147180369123816490e-01
-cdef double _INF   = 1.0 / 0.0
-cdef double _NAN_V = 0.0 / 0.0
+cdef double _INF   = INFINITY
+cdef double _NAN_V = NAN
 
 
 # ------------------------------------------------------------------ arc_hypersin 실수 커널 (asinh)
@@ -182,7 +182,7 @@ cdef double complex _arc_hypertan_complex(double complex z) noexcept nogil:
     cdef double den_re = 1.0 - re, den_im = -im
     cdef double denom2 = den_re * den_re + den_im * den_im
     if denom2 == 0.0:
-        return _make_complex(1.0 / 0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
     cdef double ratio_re = (num_re * den_re + num_im * den_im) / denom2
     cdef double ratio_im = (num_im * den_re - num_re * den_im) / denom2
     cdef double complex lr = _ln_complex(_make_complex(ratio_re, ratio_im))
@@ -239,11 +239,11 @@ cpdef object arc_hypersec(object x):
         zc = <double complex>x
         denom = zc.real * zc.real + zc.imag * zc.imag
         if denom == 0.0:
-            return complex(1.0 / 0.0, 0.0)
+            return complex(INFINITY, 0.0)
         return _arc_hypercos_complex(_make_complex(zc.real / denom, -zc.imag / denom))
     xd = <double>x
     if xd == 0.0:
-        return 1.0 / 0.0
+        return INFINITY
     return arc_hypercos(1.0 / xd)
 
 
@@ -255,11 +255,11 @@ cpdef object arc_hypercosec(object x):
         zc = <double complex>x
         denom = zc.real * zc.real + zc.imag * zc.imag
         if denom == 0.0:
-            return complex(1.0 / 0.0, 0.0)
+            return complex(INFINITY, 0.0)
         return _arc_hypersin_complex(_make_complex(zc.real / denom, -zc.imag / denom))
     xd = <double>x
     if xd == 0.0:
-        return 1.0 / 0.0
+        return INFINITY
     return arc_hypersin(1.0 / xd)
 
 
@@ -275,5 +275,5 @@ cpdef object arc_hypercotan(object x):
         return _arc_hypertan_complex(_make_complex(zc.real / denom, -zc.imag / denom))
     xd = <double>x
     if xd == 0.0:
-        return 0.0 / 0.0
+        return NAN
     return arc_hypertan(1.0 / xd)

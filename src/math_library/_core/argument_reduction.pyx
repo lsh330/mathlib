@@ -21,6 +21,21 @@ from ._helpers cimport high_word, low_word, double_to_bits, bits_to_double
 # ------------------------------------------------------------------ musl __rem_pio2_large C 구현 인라인
 cdef extern from *:
     """
+/* MSVC는 GCC 내장 함수(__builtin_*)를 지원하지 않으므로 표준 함수로 매핑 */
+#ifdef _MSC_VER
+#include <math.h>
+#include <string.h>
+#ifndef __builtin_scalbn
+#define __builtin_scalbn scalbn
+#endif
+#ifndef __builtin_fma
+#define __builtin_fma fma
+#endif
+#ifndef __builtin_memcpy
+#define __builtin_memcpy memcpy
+#endif
+#endif
+
 /* ============================================================
    musl __rem_pio2_large.c 완전 인라인 포팅
    원본 저작권: Copyright (C) 1993 by Sun Microsystems

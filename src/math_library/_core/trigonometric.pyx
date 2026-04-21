@@ -12,7 +12,7 @@
 # 복소수 커널 자체 구현 (cmath 사용 금지)
 # 참조: algorithm_reference.md 섹션 1~3
 
-from libc.math cimport fma
+from libc.math cimport fma, INFINITY
 from libc.stdint cimport uint32_t, int32_t
 from ._helpers cimport high_word, low_word, double_to_bits
 from .argument_reduction cimport rem_pio2
@@ -335,7 +335,7 @@ cdef double complex _tan_complex(double complex z) noexcept nogil:
 
     cdef double denom = cos2a + cosh2b
     if denom == 0.0:
-        return _make_complex(1.0 / 0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
 
     return _make_complex(sin2a / denom, sinh2b / denom)
 
@@ -345,7 +345,7 @@ cdef double complex _sec_complex(double complex z) noexcept nogil:
     cdef double complex c = _cos_complex(z)
     cdef double denom = c.real * c.real + c.imag * c.imag
     if denom == 0.0:
-        return _make_complex(1.0 / 0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
     return _make_complex(c.real / denom, -c.imag / denom)
 
 
@@ -354,7 +354,7 @@ cdef double complex _cosec_complex(double complex z) noexcept nogil:
     cdef double complex s = _sin_complex(z)
     cdef double denom = s.real * s.real + s.imag * s.imag
     if denom == 0.0:
-        return _make_complex(1.0 / 0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
     return _make_complex(s.real / denom, -s.imag / denom)
 
 
@@ -364,7 +364,7 @@ cdef double complex _cotan_complex(double complex z) noexcept nogil:
     cdef double complex c = _cos_complex(z)
     cdef double denom = s.real * s.real + s.imag * s.imag
     if denom == 0.0:
-        return _make_complex(1.0 / 0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
     return _make_complex(
         (c.real * s.real + c.imag * s.imag) / denom,
         (c.imag * s.real - c.real * s.imag) / denom

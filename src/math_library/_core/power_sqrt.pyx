@@ -12,7 +12,7 @@
 # power: exp(y * ln(x)) + 정수 지수 이진 거듭제곱
 # 복소수 자체 구현, 자동 실수→복소수 승격
 
-from libc.math cimport sqrt as _libc_sqrt
+from libc.math cimport sqrt as _libc_sqrt, INFINITY
 from libc.stdint cimport int32_t, uint32_t, int64_t, uint64_t
 from ._helpers cimport high_word, low_word, double_to_bits, bits_to_double, _hypot_real, _make_complex
 from .exponential cimport _exp_inline, _exp_complex
@@ -130,7 +130,7 @@ cpdef double power(double base, double exponent) noexcept:
 
     if base == 0.0:
         if exponent < 0.0:
-            return 1.0 / 0.0  # +inf
+            return INFINITY  # +inf
         return 0.0
 
     if exponent == 0.5:

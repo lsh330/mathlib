@@ -12,7 +12,7 @@
 # 복소수 자체 구현 (cmath 사용 금지)
 # 참조: algorithm_reference.md 섹션 4~6
 
-from libc.math cimport fma
+from libc.math cimport fma, INFINITY
 from libc.stdint cimport uint32_t, uint64_t
 from ._helpers cimport high_word, low_word, double_to_bits, bits_to_double
 from .power_sqrt cimport _sqrt_c, _sqrt_complex
@@ -294,7 +294,7 @@ cdef double complex _arctan_complex(double complex z) noexcept nogil:
     # 특이점: den = 0  ↔  z = i
     cdef double denom2 = den_re * den_re + den_im * den_im
     if denom2 == 0.0:
-        return _make_complex(0.0, 1.0 / 0.0)
+        return _make_complex(0.0, INFINITY)
 
     # ratio = num / den  (복소수 나눗셈)
     cdef double ratio_re = (num_re * den_re + num_im * den_im) / denom2
@@ -309,7 +309,7 @@ cdef double complex _arcsec_complex(double complex z) noexcept nogil:
     """arcsec(z) = arccos(1/z)"""
     cdef double denom = z.real*z.real + z.imag*z.imag
     if denom == 0.0:
-        return _make_complex(1.0/0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
     cdef double complex inv_z = _make_complex(z.real / denom, -z.imag / denom)
     return _arccos_complex(inv_z)
 
@@ -318,7 +318,7 @@ cdef double complex _arccosec_complex(double complex z) noexcept nogil:
     """arccosec(z) = arcsin(1/z)"""
     cdef double denom = z.real*z.real + z.imag*z.imag
     if denom == 0.0:
-        return _make_complex(1.0/0.0, 0.0)
+        return _make_complex(INFINITY, 0.0)
     cdef double complex inv_z = _make_complex(z.real / denom, -z.imag / denom)
     return _arcsin_complex(inv_z)
 

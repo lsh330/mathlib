@@ -1,0 +1,48 @@
+{
+  "version": "0.2.1",
+  "defaults": {},
+  "configurations": [
+    {
+      "type": "python",
+      "name": "Debug: pytest (current file)",
+      "project": "${file}",
+      "target": "${file}",
+      "args": [ "-v" ],
+      "stopOnEntry": false,
+      "console": "integratedTerminal",
+      "interpreter": "python",
+      "module": "pytest",
+      "cwd": "${workspaceRoot}",
+      "env": {
+        "PYTHONPATH": "${workspaceRoot}/src"
+      }
+    },
+    {
+      "type": "python",
+      "name": "Debug: pytest (all tests)",
+      "project": "${workspaceRoot}",
+      "args": [ "tests", "-v" ],
+      "stopOnEntry": false,
+      "console": "integratedTerminal",
+      "interpreter": "python",
+      "module": "pytest",
+      "cwd": "${workspaceRoot}",
+      "env": {
+        "PYTHONPATH": "${workspaceRoot}/src"
+      }
+    },
+    {
+      "type": "python",
+      "name": "Run: bench (current file)",
+      "project": "${file}",
+      "target": "${file}",
+      "stopOnEntry": false,
+      "console": "integratedTerminal",
+      "interpreter": "python",
+      "cwd": "${workspaceRoot}",
+      "env": {
+        "PYTHONPATH": "${workspaceRoot}/src"
+      }
+    }
+  ]
+}

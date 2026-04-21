@@ -6,27 +6,22 @@ from libc.stdint cimport int32_t, int64_t, uint32_t, uint64_t
 from libc.math cimport fma, sqrt as _libc_sqrt_h
 
 # IEEE 754 double <-> uint64 union (C 수준 bit manipulation)
-# double complex 생성 (nogil) 용 C 헬퍼
 cdef extern from *:
     """
     typedef union {
         double d;
         unsigned long long u;
     } DoubleUnion;
-
-    /* nogil 안전한 복소수 생성 — C99 _Complex 직접 조작 */
-    static inline __complex__ double _make_complex(double re, double im) {
-        __complex__ double z;
-        __real__ z = re;
-        __imag__ z = im;
-        return z;
-    }
     """
     ctypedef struct DoubleUnion:
         double d
         unsigned long long u
 
-    double complex _make_complex(double re, double im) noexcept nogil
+
+# nogil 안전한 복소수 생성 — Cython-native 구현
+# (이전 GCC 확장 __complex__/__real__/__imag__ 사용을 제거, MSVC/GCC/Clang 공통 호환)
+cdef inline double complex _make_complex(double re, double im) noexcept nogil:
+    return <double complex>re + <double complex>im * 1j
 
 
 # ------------------------------------------------------------------ bit ops

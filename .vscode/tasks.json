@@ -1,0 +1,105 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Cython (MSVC, inplace)",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "setup.py",
+        "build_ext",
+        "--inplace",
+        "-j",
+        "8",
+        "--compiler=msvc"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;${env:PATH}"
+        }
+      },
+      "problemMatcher": [ "$msCompile" ],
+      "presentation": { "echo": true, "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "Install Editable (pip install -e .)",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m", "pip", "install", "-e", ".",
+        "--no-build-isolation",
+        "--config-settings=--build-option=--compiler=msvc"
+      ],
+      "group": "build",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;${env:PATH}"
+        }
+      },
+      "problemMatcher": [ "$msCompile" ]
+    },
+    {
+      "label": "Install Build Dependencies",
+      "type": "shell",
+      "command": "python",
+      "args": [ "-m", "pip", "install", "Cython>=3.1", "wheel", "numpy", "setuptools" ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean Build Artifacts",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-c",
+        "import pathlib, shutil, glob; root=pathlib.Path('.'); [shutil.rmtree(p, ignore_errors=True) for p in ['build','dist'] if (root/p).exists()]; [pathlib.Path(f).unlink() for pat in ('src/math_library/**/*.pyd','src/math_library/**/*.c','src/math_library/**/*.cpp','src/math_library/**/*.html','src/math_library/**/*.obj') for f in glob.glob(pat, recursive=True) if 'laplace/cpp/' not in f.replace(chr(92),'/')]"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run pytest (all tests)",
+      "type": "shell",
+      "command": "python",
+      "args": [ "-m", "pytest", "tests", "-v" ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run pytest (current file)",
+      "type": "shell",
+      "command": "python",
+      "args": [ "-m", "pytest", "${file}", "-v" ],
+      "group": "test",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run bench (current file)",
+      "type": "shell",
+      "command": "python",
+      "args": [ "${file}" ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+      },
+      "problemMatcher": []
+    }
+  ]
+}
